@@ -36,12 +36,19 @@ interface DataSurfaceFormBuilderInterface {
    *   The form state of the containing form.
    * @param string $wrapper_key
    *   A stable identifier for the AJAX wrapper, unique within the page.
+   * @param array<string, string> $shape_display
+   *   The host's form display choice: for each key that takes contributed
+   *   shapes and should be asked for in one, its dotted key mapped to
+   *   the shape's id. Every other key renders as its canonical, and a
+   *   choice naming a key or a shape the surface does not have is
+   *   ignored. Extraction reads the choice back off the container, so
+   *   nothing else needs it. See SurfaceShapeDisplay.
    *
    * @return array
    *   A container render array with one widget-built element per
    *   definition, keyed by surface key.
    */
-  public function buildSurfaceForm(DataSurfaceInterface $surface, array $values, FormStateInterface $form_state, string $wrapper_key = 'data-surface'): array;
+  public function buildSurfaceForm(DataSurfaceInterface $surface, array $values, FormStateInterface $form_state, string $wrapper_key = 'data-surface', array $shape_display = []): array;
 
   /**
    * Names the in-progress input a rebuild has just invalidated.

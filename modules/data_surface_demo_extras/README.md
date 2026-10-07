@@ -43,15 +43,23 @@ of audience tags.
 
 - **As contract**, in the same subscriber: mounted on the content type
   surface (host id `entity_type:node_type`, so nothing here depends on
-  the module providing it). The deadline is asked for as an amount and a
-  unit — hours, days, weeks or business days — with a constraint on the
-  pair that refuses anything past thirty days on the amount, and
-  `ReviewDeadlineShape` turns the pair into seconds and back; it is
-  handed to the surface with `setThirdPartyShape()`, and the target that
-  writes third party settings applies it in prepare. The tags are a
-  list, with a pattern for each tag and a uniqueness constraint. It
-  brings a comma-separated widget for the list, because the stock
-  widgets draw a list only as a multiple select.
+  the module providing it). The deadline's canonical is what is stored,
+  an integer of seconds with the schema's Range, described as seconds.
+  Beside it this module contributes a [shape](../../docs/shapes.md),
+  `amount_unit`, with `addShape()`: an amount and a unit — hours, days,
+  weeks or business days — with a constraint on the pair that refuses
+  anything past thirty days on the amount, and `ReviewDeadlineShape`
+  turning the pair into seconds and back. A caller sends either; the
+  pipeline converts the pair in prepare, after its own constraint and
+  before the seconds' Range, so both gates hold, and the target only
+  ever writes seconds. The content type form asks a person for the
+  amount and unit because its display chooses that shape. Other modules
+  may contribute more shapes to the same key without touching this one:
+  [`data_surface_demo_duration`](../data_surface_demo_duration/README.md)
+  adds an ISO 8601 duration. The tags are a list, with a pattern for each
+  tag and a uniqueness constraint. It brings a comma-separated widget for
+  the list, because the stock widgets draw a list only as a multiple
+  select.
 - **The classic way**, in `Hook\NodeTypeFormHooks`: a
   `hook_form_node_type_form_alter` on core's own content type form, with
   an amount and a unit select whose `#element_validate` turns them into
@@ -69,7 +77,8 @@ Business days follow one rule, stated once in
 from the start of a Monday, N business days span
 `N + 2 * floor((N - 1) / 5)` calendar days of 24 hours, so ten are
 twelve days. Stored seconds carry no unit, so they read back as days,
-not business days. For the tags the
+not business days, which is why the shape says it is lossy and a form
+displaying it says it shows the nearest exact spelling. For the tags the
 schema says only that they are a list of strings; what a tag may be
 lives in the form too, which is the common case.
 
@@ -101,9 +110,14 @@ installed, the same two settings appear on
 asserts the mounted key, the contributed value, and the union each casing
 produces. `Kernel\NodeTypeToolComparisonTest` covers both content type
 extensions: the classic form for a person, the surface form, and what
-each content type tool advertises and stores.
+each content type tool advertises and stores. `Kernel\SurfaceShapesTest`
+covers the deadline's shapes: every reading storing the same seconds,
+the selector, both gates, a filter removing a shape, the display choice
+and the lossy inverse.
 
 ## See also
 
 [`docs/refinement.md`](../../docs/refinement.md) in the parent module is
-the model this is the worked example of.
+the model this is the worked example of, and
+[`docs/shapes.md`](../../docs/shapes.md) the model of the deadline's
+shape.

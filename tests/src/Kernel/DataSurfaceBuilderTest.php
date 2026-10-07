@@ -14,6 +14,7 @@ use Drupal\data_surface\DataSurfaceFactoryInterface;
 use Drupal\data_surface\Plugin\Validation\Constraint\LabeledChoiceConstraint;
 use Drupal\data_surface\Target\SettingsShapeInterface;
 use Drupal\data_surface_test\CasingVariantRefiner;
+use Drupal\data_surface_test\NumberShape;
 use Drupal\data_surface_test\VariantPolicyFilter;
 use PHPUnit\Framework\Attributes\RunTestsInSeparateProcesses;
 use PHPUnit\Framework\Attributes\Group;
@@ -89,6 +90,7 @@ class DataSurfaceBuilderTest extends DataSurfaceKernelTestBase {
       'extendChoices' => static fn (DataSurfaceBuilderInterface $b) => $b->extendChoices('casing', ['lowercase'], 'other'),
       'setThirdPartyDefinition' => static fn (DataSurfaceBuilderInterface $b) => $b->setThirdPartyDefinition('other', 'badge', clone $definition),
       'setThirdPartyShape' => fn (DataSurfaceBuilderInterface $b) => $b->setThirdPartyShape('other', $this->shape()),
+      'addShape' => static fn (DataSurfaceBuilderInterface $b) => $b->addShape('casing', 'spelled', new NumberShape(1, 'map')),
       'addRefinement' => static fn (DataSurfaceBuilderInterface $b) => $b->addRefinement('casing', ['extras']),
       'addRefiner' => static fn (DataSurfaceBuilderInterface $b) => $b->addRefiner('casing', new CasingVariantRefiner()),
       'addFilter' => static fn (DataSurfaceBuilderInterface $b) => $b->addFilter(new VariantPolicyFilter('casing', ['none'])),

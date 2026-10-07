@@ -17,13 +17,16 @@ the same rules:
   except the unit: it declares an integer with a Range of 3600 to
   2592000, and the key is not named for what it counts. Core's form asks
   a person for an amount and a unit, hours, days, weeks or business
-  days, and turns the pair into seconds in its element validator. The
-  surface asks for the same amount and unit, and the same conversion is
-  a storage shape the extras module hands the surface, which the target
-  applies when it prepares what it writes. Business days follow one
-  rule on both sides: counted from the start of a Monday, N business
-  days of 24 hours span `N + 2 * floor((N - 1) / 5)` calendar days, so
-  ten are twelve days, 1036800 seconds.
+  days, and turns the pair into seconds in its element validator. On
+  the surface the seconds are the key's canonical, the stored value said
+  with its unit, and the same amount and unit is a shape the extras
+  module contributes beside it; a second module that owns nothing here,
+  `data_surface_demo_duration`, contributes an ISO 8601 duration as
+  another. A caller sends any of the three, and the pipeline converts a
+  shape to the seconds when it prepares what is written. Business days
+  follow one rule on both sides: counted from the start of a Monday, N
+  business days of 24 hours span `N + 2 * floor((N - 1) / 5)` calendar
+  days, so ten are twelve days, 1036800 seconds.
 - `audience_tags`, a list of lower case tags, each once. Core's form
   takes them as comma-separated text and splits, trims, lower cases and
   de-duplicates what a person typed; the schema says only that it is a
@@ -53,7 +56,11 @@ advertises on purpose.
 
 Both schemas below were produced by the Tool API's own definition
 serializer, which is the document an MCP client or a function calling
-model is handed.
+model is handed. The deadline is the one key it cannot describe
+exactly: a key with shapes is a union decided by the value, which JSON
+Schema says with `oneOf` and the Tool API has no way to say, so it is
+advertised as an untyped value whose description names each reading,
+and whose `examples` show one of each.
 
 ## What happens
 
@@ -73,8 +80,11 @@ caller sends that.
 | Case | `data_surface:node_type_add` | `tool_belt:entity_bundle_add` | Core's content type form, for a person |
 | --- | --- | --- | --- |
 | One week. Surface: `{"amount": 1, "unit": "weeks"}`; classic: `604800`, by a schema-only agent that reads 3600 and 2592000 as an hour and thirty days in seconds and infers the unit, rightly, though nothing tells it so before storage; form: 1, Weeks | Created. Stored `{"review_deadline":604800,"audience_tags":[]}`. | Created. Stored `{"review_deadline":604800}`. | Stored `{"review_deadline":604800,"audience_tags":[]}`. |
-| Forty-five days, past the ceiling. Surface: `{"amount": 45, "unit": "days"}`; classic: `3888000`; form: 45, Days | Refused; nothing created. `values.amount`: (property third_party_settings) (property data_surface_demo_extras) (property review_deadline) A review deadline is at least one hour and at most thirty days; 45 days is outside that. | Created. Stored `{"review_deadline":3888000}`. The stored schema refuses it (This value should be between 3600 and 2592000.), but nothing on the write path asked. | Refused: The review deadline must be between one hour and thirty days. |
-| A schema-only agent that infers instead that the integer counts days sends `7`, meaning seven. Form: 7, Days, which is what it meant | Refused; nothing created. `values`: (property third_party_settings) (property data_surface_demo_extras) (property review_deadline) Invalid values given. Values must be represented as an associative array. | Created. Stored `{"review_deadline":7}`. The stored schema refuses it (This value should be between 3600 and 2592000.), but nothing on the write path asked. | Stored `{"review_deadline":604800,"audience_tags":[]}`. |
+| One week as seconds, the canonical, whose unit the surface now says: `604800` to both tools; form: 1, Weeks | Created. Stored `{"review_deadline":604800,"audience_tags":[]}`. | Created. Stored `{"review_deadline":604800}`. | Stored `{"review_deadline":604800,"audience_tags":[]}`. |
+| One week as P1W: `"P1W"` to both tools, which on the surface is a shape contributed by `data_surface_demo_duration`, a module that owns nothing here; form: 1, Weeks, since core's form has no such reading | Created. Stored `{"review_deadline":604800,"audience_tags":[]}`. | Created. Stored `{"review_deadline":0}`. The stored schema refuses it (This value should be between 3600 and 2592000.), but nothing on the write path asked. | Stored `{"review_deadline":604800,"audience_tags":[]}`. |
+| One week as P1W, naming the shape: `{"@shape": "iso8601", "@value": "P1W"}` to both tools; form: 1, Weeks | Created. Stored `{"review_deadline":604800,"audience_tags":[]}`. | Refused; nothing created. `bundle`: The configuration property third_party_settings.data_surface_demo_extras.review_deadline.@shape doesn't exist. | Stored `{"review_deadline":604800,"audience_tags":[]}`. |
+| Forty-five days, past the ceiling. Surface: `{"amount": 45, "unit": "days"}`; classic: `3888000`; form: 45, Days | Refused; nothing created. `third_party_settings.data_surface_demo_extras.review_deadline.amount`: A review deadline is at least one hour and at most thirty days; 45 days is outside that. | Created. Stored `{"review_deadline":3888000}`. The stored schema refuses it (This value should be between 3600 and 2592000.), but nothing on the write path asked. | Refused: The review deadline must be between one hour and thirty days. |
+| A schema-only agent that infers instead that the integer counts days sends `7`, meaning seven. Form: 7, Days, which is what it meant | Refused; nothing created. `third_party_settings.data_surface_demo_extras.review_deadline`: This value should be between 3600 and 2592000. `third_party_settings.data_surface_demo_extras.review_deadline`: Review deadline was read as its own value; none of its shapes (amount_unit (from data_surface_demo_extras), iso8601 (from data_surface_demo_duration)) took it either. | Created. Stored `{"review_deadline":7}`. The stored schema refuses it (This value should be between 3600 and 2592000.), but nothing on the write path asked. | Stored `{"review_deadline":604800,"audience_tags":[]}`. |
 | Ten business days. Surface: `{"amount": 10, "unit": "business_days"}`; classic: `864000`, a schema-only agent's best inference, ten days in seconds: plausible, in range, and wrong, since no reading of the schema says what a business day becomes; form: 10, Business days | Created. Stored `{"review_deadline":1036800,"audience_tags":[]}`. | Created. Stored `{"review_deadline":864000}`. | Stored `{"review_deadline":1036800,"audience_tags":[]}`. |
 | Set the tags `["news", "sports"]`. Form: news, sports | Created. Stored `{"review_deadline":null,"audience_tags":["news","sports"]}`. | Created. Stored `{"audience_tags":["news","sports"]}`. | Stored `{"review_deadline":null,"audience_tags":["news","sports"]}`. |
 | Tags as a person types them: `["News", "news ", "Sports"]`. Form: News, news , Sports | Refused; nothing created. `values`: (property third_party_settings) (property data_surface_demo_extras) (property audience_tags) (item 2) An audience tag is lower case letters and digits, words joined by one space or one hyphen, with nothing around it. | Created. Stored `{"audience_tags":["News","news ","Sports"]}`. | Stored `{"review_deadline":null,"audience_tags":["news","sports"]}`. |
@@ -221,46 +231,23 @@ caller sends that.
                             ],
                             "properties": {
                                 "review_deadline": {
-                                    "type": [
-                                        "object",
-                                        "null"
-                                    ],
-                                    "properties": {
-                                        "amount": {
-                                            "oneOf": [
-                                                {
-                                                    "type": "integer"
-                                                },
-                                                {
-                                                    "type": "null"
-                                                }
-                                            ],
-                                            "minimum": 1,
-                                            "description": "Amount",
-                                            "title": "Amount"
+                                    "$comment": "No schema is defined for property of type Drupal\\Core\\TypedData\\Plugin\\DataType\\Any. See https://www.drupal.org/node/3424710 for information on implementing schemas in your program code.",
+                                    "examples": [
+                                        604800,
+                                        {
+                                            "amount": 1,
+                                            "unit": "weeks"
                                         },
-                                        "unit": {
-                                            "oneOf": [
-                                                {
-                                                    "type": "string"
-                                                },
-                                                {
-                                                    "type": "null"
-                                                }
-                                            ],
-                                            "default": "days",
-                                            "enum": [
-                                                "hours",
-                                                "days",
-                                                "weeks",
-                                                "business_days",
-                                                null
-                                            ],
-                                            "description": "Unit",
-                                            "title": "Unit"
+                                        "P1W",
+                                        {
+                                            "@shape": "amount_unit",
+                                            "@value": {
+                                                "amount": 1,
+                                                "unit": "weeks"
+                                            }
                                         }
-                                    },
-                                    "description": "Review deadline: How long an editor has to review new content of this type, from one hour to thirty days. Leave the amount empty for no deadline.",
+                                    ],
+                                    "description": "Review deadline: How long an editor has to review new content of this type, in seconds, from one hour (3600) to thirty days (2592000). Leave it empty for no deadline. Send one of: its own value, an integer from 3600 to 2592000; the amount_unit shape from data_surface_demo_extras, Amount and unit: an object of amount (an integer of at least 1), unit (a string one of hours, days, weeks, business_days); the iso8601 shape from data_surface_demo_duration, ISO 8601 duration: a string matching /^P(?=\\d|T\\d)(?:\\d+Y)?(?:\\d+M)?(?:\\d+W)?(?:\\d+D)?(?:T(?=\\d)(?:\\d+H)?(?:\\d+M)?(?:\\d+S)?)?$/. A value is read as the first of these it fits and satisfies; to say which one you mean, send {\"@shape\": \"<shape id>\", \"@value\": <the value>} instead.",
                                     "title": "Review deadline"
                                 },
                                 "audience_tags": {

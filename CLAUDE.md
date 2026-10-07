@@ -22,7 +22,7 @@ ddev exec bash -c 'cd /var/www/html/web && SIMPLETEST_DB=mysql://db:db@db/db \
   modules/custom/data_surface'
 ```
 
-The baseline as of this writing: **603 tests, 3332 assertions, 0 errors,
+The baseline as of this writing: **616 tests, 3606 assertions, 0 errors,
 2 failures**. The test and assertion counts drift upward as work lands
 and are not the thing to check. **No test may error, and the only tests
 that may fail are the ones in `DataSurfaceRefinementTest`**, for a reason
@@ -92,6 +92,11 @@ npx --yes cspell@8 --config /tmp/merged.json --no-progress --no-summary "**"
   host's surface) or a slot (`mountVariants()`), never a refiner swapping
   a map in: the narrowing check refuses a map that gains or loses a
   property. See `docs/nesting.md`.
+- A contributed shape is not the shape above: it changes what a key
+  accepts, never its canonical, which is what is stored. Contribute one
+  with `addShape()`; a payload names it with `@shape`, a form display
+  chooses it, and the conversion happens in prepare. See
+  `docs/shapes.md`.
 - Requiredness appears only when it says something: `setRequired(TRUE)` on
   the keys that must be configured, nothing at all on the rest, because
   core data definitions are optional by default.
@@ -137,7 +142,7 @@ src/Form/                Form builder, host traits, the generic provider form.
 src/Widget/ src/Plugin/  Definition to form element; resolvers, hosts, constraints.
 src/Options/             Option sets, the resolver plugin base and manager.
 src/Refinement/ Event/   Narrowing and choice sets; the build event.
-modules/                 Seven experimental submodules; each has its own README.
+modules/                 Eight experimental submodules; each has its own README.
 tests/src/               Unit, Kernel, Functional, FunctionalJavascript.
 docs/ scripts/           Published documentation; check.sh and the generator.
 ```

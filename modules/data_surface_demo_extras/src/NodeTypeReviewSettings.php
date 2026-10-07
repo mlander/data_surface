@@ -41,6 +41,14 @@ final class NodeTypeReviewSettings {
   public const DEADLINE = 'review_deadline';
 
   /**
+   * The deadline's dotted key on the content type surface.
+   *
+   * Where it is mounted, under this module's third party namespace, and
+   * so what a module contributing another shape to it names.
+   */
+  public const DEADLINE_KEY = 'third_party_settings.data_surface_demo_extras.' . self::DEADLINE;
+
+  /**
    * The shortest review deadline, in seconds: one hour.
    */
   public const DEADLINE_MIN = 3600;

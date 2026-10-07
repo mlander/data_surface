@@ -109,13 +109,16 @@ the same rules:
   except the unit: it declares an integer with a Range of 3600 to
   2592000, and the key is not named for what it counts. Core's form asks
   a person for an amount and a unit, hours, days, weeks or business
-  days, and turns the pair into seconds in its element validator. The
-  surface asks for the same amount and unit, and the same conversion is
-  a storage shape the extras module hands the surface, which the target
-  applies when it prepares what it writes. Business days follow one
-  rule on both sides: counted from the start of a Monday, N business
-  days of 24 hours span `N + 2 * floor((N - 1) / 5)` calendar days, so
-  ten are twelve days, 1036800 seconds.
+  days, and turns the pair into seconds in its element validator. On
+  the surface the seconds are the key's canonical, the stored value said
+  with its unit, and the same amount and unit is a shape the extras
+  module contributes beside it; a second module that owns nothing here,
+  `data_surface_demo_duration`, contributes an ISO 8601 duration as
+  another. A caller sends any of the three, and the pipeline converts a
+  shape to the seconds when it prepares what is written. Business days
+  follow one rule on both sides: counted from the start of a Monday, N
+  business days of 24 hours span `N + 2 * floor((N - 1) / 5)` calendar
+  days, so ten are twelve days, 1036800 seconds.
 - `audience_tags`, a list of lower case tags, each once. Core's form
   takes them as comma-separated text and splits, trims, lower cases and
   de-duplicates what a person typed; the schema says only that it is a
@@ -145,7 +148,11 @@ advertises on purpose.
 
 Both schemas below were produced by the Tool API's own definition
 serializer, which is the document an MCP client or a function calling
-model is handed.
+model is handed. The deadline is the one key it cannot describe
+exactly: a key with shapes is a union decided by the value, which JSON
+Schema says with `oneOf` and the Tool API has no way to say, so it is
+advertised as an untyped value whose description names each reading,
+and whose `examples` show one of each.
 
 MARKDOWN;
   }

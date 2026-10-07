@@ -17,6 +17,7 @@ use Drupal\data_surface\DataSurfaceInterface;
 use Drupal\data_surface\DefinitionMetadata;
 use Drupal\data_surface\Options\DataSurfaceOptions;
 use Drupal\data_surface\SurfaceEntry;
+use Drupal\data_surface\SurfaceShape;
 
 /**
  * The one entry point from raw values to stored values.
@@ -320,16 +321,29 @@ final class DataSurfacePipeline implements DataSurfacePipelineInterface {
         }
         continue;
       }
+      // Both gates, for every value sent in a contributed shape at any
+      // depth of this key: the shape's own constraints judge what was
+      // sent, here, and the canonical's judge what it becomes, below,
+      // with everything else the key holds.
+      $gate = ['refusals' => [], 'suppressed' => [], 'bare' => []];
+      $value = $this->shapeGate($definition, $value, $name, '', $gate);
       $typed_data = $this->typedDataManager->create($definition, $value, $name);
-      $refusals = [];
+      $refusals = $gate['refusals'];
       foreach ($typed_data->validate() as $violation) {
+        $path = (string) $violation->getPropertyPath();
+        if (static::underAny($path, $gate['suppressed'])) {
+          // A shape refused what was sent there, so there is no
+          // canonical value to judge, and nothing to add to its answer.
+          continue;
+        }
         // The message stays the object the constraint built. Flattening
         // it here would render its placeholders once, as plain text, and
         // whatever reads the violation afterwards would escape that text
         // a second time; a form error, a tool result and a log line each
         // render it themselves, at their own boundary.
-        $refusals[] = new SurfaceViolation($name, (string) $violation->getPropertyPath(), $violation->getMessage());
+        $refusals[] = new SurfaceViolation($name, $path, $violation->getMessage());
       }
+      $refusals = array_merge($refusals, $this->untriedShapes($refusals, $gate['bare'], $name));
       if ($refusals !== [] && $this->isStale($definition, $value, $name, $current)) {
         // The whole key is reported as stale and not re-judged. What
         // else its constraints would say is about a value this run is
@@ -704,6 +718,9 @@ final class DataSurfacePipeline implements DataSurfacePipelineInterface {
    *   The path.
    */
   protected static function joinPath(string $path, string $segment): string {
+    if ($segment === '') {
+      return $path;
+    }
     return $path === '' ? $segment : $path . '.' . $segment;
   }
 
@@ -711,7 +728,7 @@ final class DataSurfacePipeline implements DataSurfacePipelineInterface {
    * {@inheritdoc}
    */
   public function prepare(DataSurfaceInterface $surface, array $values, DataSurfaceTargetInterface $target): PreparedValues {
-    return $target->prepare($surface, $values);
+    return $target->prepare($surface, $this->canonical($surface, $values));
   }
 
   /**
@@ -752,8 +769,12 @@ final class DataSurfacePipeline implements DataSurfacePipelineInterface {
     if (!$violations->isEmpty()) {
       return new DataSurfaceResult($values, $violations, access: $access);
     }
+    // From here on the values are what will be stored: anything sent in
+    // a contributed shape is its canonical, which is what the target is
+    // handed and what a caller reading the result is told.
+    $canonical = $this->canonical($surface, $values);
     try {
-      $prepared = $this->prepare($surface, $values, $target);
+      $prepared = $target->prepare($surface, $canonical);
     }
     catch (TargetViolationsException $e) {
       return new DataSurfaceResult($values, $e->getViolations(), access: $access);
@@ -763,10 +784,10 @@ final class DataSurfacePipeline implements DataSurfacePipelineInterface {
     // references it carries are how a caller — a form warning, an
     // agent's dry run — learns what to re-choose.
     if ($dry_run) {
-      return new DataSurfaceResult($values, $violations, $prepared, access: $access);
+      return new DataSurfaceResult($canonical, $violations, $prepared, access: $access);
     }
     $this->commit($prepared, $target);
-    return new DataSurfaceResult($values, $violations, $prepared, TRUE, $access);
+    return new DataSurfaceResult($canonical, $violations, $prepared, TRUE, $access);
   }
 
   /**
@@ -800,6 +821,37 @@ final class DataSurfacePipeline implements DataSurfacePipelineInterface {
    *   When the input cannot be held by the definition at all.
    */
   protected function acceptValue(DataDefinitionInterface $definition, mixed $input, mixed $fallback, string $path): mixed {
+    $shapes = DefinitionMetadata::getShapes($definition);
+    return $shapes === []
+      ? $this->acceptCanonical($definition, $input, $fallback, $path)
+      : $this->acceptShaped($definition, $shapes, $input, $fallback, $path);
+  }
+
+  /**
+   * Accepts one value against one definition, read as that definition.
+   *
+   * The body of acceptValue() for a definition taking no shapes, and
+   * how a shaped key tries each of its readings in turn: the canonical,
+   * and each shape's own input definition.
+   *
+   * @param \Drupal\Core\TypedData\DataDefinitionInterface $definition
+   *   The definition the value is read as.
+   * @param mixed $input
+   *   The raw input value.
+   * @param mixed $fallback
+   *   What this key already holds, in this reading.
+   * @param string $path
+   *   The dotted path of this value, for refusal reporting.
+   *
+   * @return mixed
+   *   The accepted value.
+   *
+   * @throws \Drupal\data_surface\Pipeline\UnknownKeysException
+   *   When a nested input key is not a property definition.
+   * @throws \Drupal\data_surface\Pipeline\ShapeMismatchException
+   *   When the input cannot be held by the definition at all.
+   */
+  protected function acceptCanonical(DataDefinitionInterface $definition, mixed $input, mixed $fallback, string $path): mixed {
     if ($definition instanceof ListDataDefinitionInterface) {
       return $this->acceptList($definition, $input, $fallback, $path);
     }
@@ -834,6 +886,387 @@ final class DataSurfacePipeline implements DataSurfacePipelineInterface {
         : $child;
     }
     return $values;
+  }
+
+  /**
+   * Accepts a value for a key that takes contributed shapes.
+   *
+   * The matching rule. A value that names its shape with the SHAPE
+   * selector is read in that shape and nothing else. Otherwise the
+   * canonical is tried first and then each shape in the order it was
+   * contributed, and the value is read by the first whose definition it
+   * fits — the right kind of value, a map with only that map's keys —
+   * and whose own constraints it satisfies. Sealing refused any two
+   * readings one input could fit, so the order decides nothing a caller
+   * could not have predicted.
+   *
+   * When no reading takes it, the one it fits is the one it was meant
+   * for, and validate() reports that reading's refusal: forty-five days
+   * sent as an amount and a unit is refused in days, not as "not an
+   * integer". When it fits none, or more than one, it is the canonical's
+   * value and the canonical's refusal, and validate() names the shapes
+   * that were tried too.
+   *
+   * A value read in a shape comes back as the selector naming it, so
+   * validate() knows which gates to run and prepare() which conversion;
+   * a value read as the canonical comes back bare. Nothing is converted
+   * here.
+   *
+   * @param \Drupal\Core\TypedData\DataDefinitionInterface $definition
+   *   The canonical definition.
+   * @param array<string, \Drupal\data_surface\SurfaceShape> $shapes
+   *   Its shapes, in order.
+   * @param mixed $input
+   *   The raw input value.
+   * @param mixed $fallback
+   *   What the key already holds, canonical.
+   * @param string $path
+   *   The dotted path of the value.
+   *
+   * @return mixed
+   *   The canonical value, a selector naming the shape it was read in,
+   *   or NULL for input that holds nothing.
+   *
+   * @throws \Drupal\data_surface\Pipeline\UnknownKeysException
+   *   When a selector carries anything beside the shape and the value,
+   *   or no reading fits and the canonical refuses a key.
+   * @throws \Drupal\data_surface\Pipeline\ShapeMismatchException
+   *   When no reading fits and the canonical cannot hold the value.
+   */
+  protected function acceptShaped(DataDefinitionInterface $definition, array $shapes, mixed $input, mixed $fallback, string $path): mixed {
+    if (!ValueState::isConfigured($input)) {
+      return NULL;
+    }
+    if (SurfaceShape::isSelected($input)) {
+      return $this->acceptSelected($shapes, $input, $fallback, $path);
+    }
+    $fitting = [];
+    $refusal = NULL;
+    $canonical = NULL;
+    try {
+      $canonical = $this->acceptCanonical($definition, $input, $fallback, $path);
+      if (static::fits($definition, $input, $canonical)) {
+        if ($this->holds($definition, $canonical)) {
+          return $canonical;
+        }
+        $fitting[] = $canonical;
+      }
+    }
+    catch (UnknownKeysException | ShapeMismatchException $e) {
+      $refusal = $e;
+    }
+    foreach ($shapes as $shape) {
+      $reading = $shape->shape->getInputDefinition();
+      try {
+        $accepted = $this->acceptCanonical($reading, $input, static::inShape($shape, $fallback), $path);
+      }
+      catch (UnknownKeysException | ShapeMismatchException) {
+        continue;
+      }
+      if (!static::fits($reading, $input, $accepted)) {
+        continue;
+      }
+      if ($this->holds($reading, $accepted)) {
+        return SurfaceShape::select($shape->id, $accepted);
+      }
+      $fitting[] = SurfaceShape::select($shape->id, $accepted);
+    }
+    if (count($fitting) === 1) {
+      return $fitting[0];
+    }
+    if ($refusal instanceof ShapeMismatchException) {
+      throw new ShapeMismatchException($refusal->getPath(), sprintf(
+        '%s, or one of its shapes %s',
+        $refusal->getExpected(),
+        implode(', ', array_map(static fn (SurfaceShape $shape): string => $shape->describe(), $shapes)),
+      ), $refusal->getActual());
+    }
+    if ($refusal !== NULL) {
+      throw $refusal;
+    }
+    return $canonical;
+  }
+
+  /**
+   * Accepts a value whose payload named the shape it is in.
+   *
+   * @param array<string, \Drupal\data_surface\SurfaceShape> $shapes
+   *   The key's shapes.
+   * @param array $input
+   *   The selector.
+   * @param mixed $fallback
+   *   What the key already holds, canonical.
+   * @param string $path
+   *   The dotted path of the value.
+   *
+   * @return array|null
+   *   The selector with the value accepted in the named shape, or NULL
+   *   when the value holds nothing. A shape the key does not take is
+   *   kept as it was named, for validate() to refuse by name: whether it
+   *   is taken can depend on a policy filter, and only the refined
+   *   surface knows.
+   *
+   * @throws \Drupal\data_surface\Pipeline\UnknownKeysException
+   *   When the selector carries anything beside the shape and the value.
+   */
+  protected function acceptSelected(array $shapes, array $input, mixed $fallback, string $path): ?array {
+    $strangers = array_keys(array_diff_key($input, [self::SHAPE => TRUE, self::SHAPE_VALUE => TRUE]));
+    if ($strangers !== []) {
+      throw new UnknownKeysException(array_map('strval', $strangers), $path);
+    }
+    $id = $input[self::SHAPE];
+    $value = $input[self::SHAPE_VALUE] ?? NULL;
+    $shape = is_string($id) ? ($shapes[$id] ?? NULL) : NULL;
+    if ($shape === NULL) {
+      return SurfaceShape::select(is_scalar($id) ? (string) $id : get_debug_type($id), $value);
+    }
+    $accepted = $this->acceptCanonical($shape->shape->getInputDefinition(), $value, static::inShape($shape, $fallback), $path);
+    return ValueState::isConfigured($accepted) ? SurfaceShape::select($shape->id, $accepted) : NULL;
+  }
+
+  /**
+   * Says what a key already holds in one of its shapes.
+   *
+   * What a partial value in that shape is merged over: an amount sent
+   * without a unit keeps the unit the stored value reads back in.
+   *
+   * @param \Drupal\data_surface\SurfaceShape $shape
+   *   The shape.
+   * @param mixed $fallback
+   *   What the key holds, canonical.
+   *
+   * @return mixed
+   *   The same value in the shape, or NULL when the key holds nothing.
+   */
+  protected static function inShape(SurfaceShape $shape, mixed $fallback): mixed {
+    return ValueState::isConfigured($fallback) ? $shape->shape->fromCanonical($fallback) : NULL;
+  }
+
+  /**
+   * Answers whether an accepted value is the kind its reading holds.
+   *
+   * The structural half of the matching rule. Accepting already refused
+   * a map with keys the reading does not declare, and an array where a
+   * single value goes; what is left is whether the cast landed in the
+   * reading's own type. A string reading fits only what arrived as a
+   * string, because every scalar casts to one.
+   *
+   * @param \Drupal\Core\TypedData\DataDefinitionInterface $definition
+   *   The reading.
+   * @param mixed $input
+   *   The raw input.
+   * @param mixed $accepted
+   *   What accepting it as that reading produced.
+   *
+   * @return bool
+   *   TRUE when the value is of the reading's kind.
+   */
+  protected static function fits(DataDefinitionInterface $definition, mixed $input, mixed $accepted): bool {
+    [$kind] = SurfaceShape::signature($definition);
+    return match ($kind) {
+      'list', 'map' => is_array($accepted),
+      'number' => is_int($accepted) || ($definition->getDataType() === 'float' && is_float($accepted)),
+      'boolean' => is_bool($accepted),
+      'string' => is_string($input),
+      default => TRUE,
+    };
+  }
+
+  /**
+   * Answers whether a value satisfies a reading's own constraints.
+   *
+   * @param \Drupal\Core\TypedData\DataDefinitionInterface $definition
+   *   The reading.
+   * @param mixed $value
+   *   The accepted value.
+   *
+   * @return bool
+   *   TRUE when nothing in the definition refuses it.
+   */
+  protected function holds(DataDefinitionInterface $definition, mixed $value): bool {
+    return count($this->typedDataManager->create($definition, $value)->validate()) === 0;
+  }
+
+  /**
+   * Runs the first gate on every shaped value inside one key's value.
+   *
+   * Walks the value beside its definition. Where a definition takes
+   * shapes and the value names one, the shape's own constraints judge
+   * the value as sent, each refusal filed at its path inside the key;
+   * a value they take is converted, so the canonical's constraints judge
+   * it as the rest of the key's value is judged, which is the second
+   * gate. Where they refuse it there is nothing to convert, and its
+   * path is suppressed so the canonical has nothing to add. A configured
+   * value read as the canonical is noted, so a refusal of it can name
+   * the shapes that were tried.
+   *
+   * @param \Drupal\Core\TypedData\DataDefinitionInterface $definition
+   *   The definition at this depth, refined.
+   * @param mixed $value
+   *   The accepted value at this depth.
+   * @param string $name
+   *   The surface key the violations are filed under.
+   * @param string $path
+   *   The property path within the key; '' for the value itself.
+   * @param array{refusals: \Drupal\data_surface\Pipeline\SurfaceViolation[], suppressed: string[], bare: array<string, \Drupal\Core\TypedData\DataDefinitionInterface>} $gate
+   *   What the walk found: refusals, suppressed paths, and the paths of
+   *   values read as the canonical, with their definitions.
+   *
+   * @return mixed
+   *   The value with every shaped value in it canonical.
+   */
+  protected function shapeGate(DataDefinitionInterface $definition, mixed $value, string $name, string $path, array &$gate): mixed {
+    $shapes = DefinitionMetadata::getShapes($definition);
+    if ($shapes !== []) {
+      if (!SurfaceShape::isSelected($value)) {
+        if (ValueState::isConfigured($value)) {
+          $gate['bare'][$path] = $definition;
+        }
+        return $value;
+      }
+      $id = $value[self::SHAPE];
+      $sent = $value[self::SHAPE_VALUE] ?? NULL;
+      $shape = is_string($id) ? ($shapes[$id] ?? NULL) : NULL;
+      if ($shape === NULL) {
+        $gate['refusals'][] = new SurfaceViolation($name, $path, $this->t('@label takes no @shape shape here. It takes its own value, or one of these shapes: @shapes.', [
+          '@label' => $definition->getLabel() ?? $name,
+          '@shape' => is_scalar($id) ? (string) $id : get_debug_type($id),
+          '@shapes' => implode(', ', array_map(static fn (SurfaceShape $shape): string => $shape->describe(), $shapes)),
+        ]));
+        $gate['suppressed'][] = $path;
+        return NULL;
+      }
+      $refused = FALSE;
+      foreach ($this->typedDataManager->create($shape->shape->getInputDefinition(), $sent, $name)->validate() as $violation) {
+        $gate['refusals'][] = new SurfaceViolation($name, static::joinPath($path, (string) $violation->getPropertyPath()), $violation->getMessage());
+        $refused = TRUE;
+      }
+      if ($refused) {
+        $gate['suppressed'][] = $path;
+        return NULL;
+      }
+      return ValueState::isConfigured($sent) ? $shape->shape->toCanonical($sent) : NULL;
+    }
+    if (!is_array($value)) {
+      return $value;
+    }
+    if ($definition instanceof ListDataDefinitionInterface) {
+      foreach ($value as $delta => $item) {
+        $value[$delta] = $this->shapeGate($definition->getItemDefinition(), $item, $name, static::joinPath($path, (string) $delta), $gate);
+      }
+      return $value;
+    }
+    $properties = $definition instanceof ComplexDataDefinitionInterface ? $definition->getPropertyDefinitions() : [];
+    foreach (array_intersect_key($properties, $value) as $property => $property_definition) {
+      $value[$property] = $this->shapeGate($property_definition, $value[$property], $name, static::joinPath($path, (string) $property), $gate);
+    }
+    return $value;
+  }
+
+  /**
+   * Names the shapes that were tried, beside a refused canonical value.
+   *
+   * @param \Drupal\data_surface\Pipeline\SurfaceViolation[] $refusals
+   *   What the key's constraints refused.
+   * @param array<string, \Drupal\Core\TypedData\DataDefinitionInterface> $bare
+   *   The paths of values read as the canonical, with their definitions.
+   * @param string $name
+   *   The surface key.
+   *
+   * @return \Drupal\data_surface\Pipeline\SurfaceViolation[]
+   *   One violation per refused canonical value whose key takes shapes.
+   */
+  protected function untriedShapes(array $refusals, array $bare, string $name): array {
+    $notes = [];
+    foreach ($bare as $path => $definition) {
+      $path = (string) $path;
+      foreach ($refusals as $refusal) {
+        if (!static::underAny($refusal->path, [$path])) {
+          continue;
+        }
+        $notes[] = new SurfaceViolation($name, $path, $this->t('@label was read as its own value; none of its shapes (@shapes) took it either.', [
+          '@label' => $definition->getLabel() ?? $name,
+          '@shapes' => implode(', ', array_map(static fn (SurfaceShape $shape): string => $shape->describe(), DefinitionMetadata::getShapes($definition))),
+        ]));
+        break;
+      }
+    }
+    return $notes;
+  }
+
+  /**
+   * Answers whether a property path is at or below any of some paths.
+   *
+   * @param string $path
+   *   The property path.
+   * @param string[] $prefixes
+   *   The paths; '' is the whole value.
+   *
+   * @return bool
+   *   TRUE when the path is one of them or inside one.
+   */
+  protected static function underAny(string $path, array $prefixes): bool {
+    foreach ($prefixes as $prefix) {
+      if ($prefix === '' || $path === $prefix || str_starts_with($path, $prefix . '.')) {
+        return TRUE;
+      }
+    }
+    return FALSE;
+  }
+
+  /**
+   * {@inheritdoc}
+   */
+  public function canonical(DataSurfaceInterface $surface, array $values): array {
+    $definitions = $surface->refine($values)->getDefinitions();
+    foreach ($values as $name => $value) {
+      $definition = $definitions->get((string) $name);
+      if ($definition !== NULL) {
+        $values[$name] = static::canonicalOf($definition, $value, (string) $name);
+      }
+    }
+    return $values;
+  }
+
+  /**
+   * Converts every shaped value inside one value to its canonical.
+   *
+   * @param \Drupal\Core\TypedData\DataDefinitionInterface $definition
+   *   The definition at this depth, refined.
+   * @param mixed $value
+   *   The value at this depth.
+   * @param string $path
+   *   The dotted path, for the message.
+   *
+   * @return mixed
+   *   The value, canonical throughout.
+   *
+   * @throws \InvalidArgumentException
+   *   When a value names a shape its definition does not take.
+   */
+  protected static function canonicalOf(DataDefinitionInterface $definition, mixed $value, string $path): mixed {
+    if (SurfaceShape::isSelected($value)) {
+      $shape = DefinitionMetadata::getShapes($definition)[$value[self::SHAPE]] ?? NULL;
+      if ($shape === NULL) {
+        throw new \InvalidArgumentException(sprintf('The value at "%s" names a shape that key does not take; validate the values before preparing them.', $path));
+      }
+      $sent = $value[self::SHAPE_VALUE] ?? NULL;
+      return ValueState::isConfigured($sent) ? $shape->shape->toCanonical($sent) : NULL;
+    }
+    if (!is_array($value)) {
+      return $value;
+    }
+    if ($definition instanceof ListDataDefinitionInterface) {
+      foreach ($value as $delta => $item) {
+        $value[$delta] = static::canonicalOf($definition->getItemDefinition(), $item, $path . '.' . $delta);
+      }
+      return $value;
+    }
+    $properties = $definition instanceof ComplexDataDefinitionInterface ? $definition->getPropertyDefinitions() : [];
+    foreach (array_intersect_key($properties, $value) as $property => $property_definition) {
+      $value[$property] = static::canonicalOf($property_definition, $value[$property], $path . '.' . $property);
+    }
+    return $value;
   }
 
   /**

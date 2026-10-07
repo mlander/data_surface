@@ -94,7 +94,7 @@ would have shown.
 
 ## Glossary
 
-The module uses these seven words in exactly one sense each.
+The module uses these eight words in exactly one sense each.
 
 - **Surface** — an immutable group of data definitions, plus the map of
   which definitions depend on which others and the refiner chains that
@@ -113,6 +113,12 @@ The module uses these seven words in exactly one sense each.
   constraint into a value/label list with its cacheability, so the list
   that validates a value and the list that is offered as form options are
   the same list, derived rather than repeated.
+- **Shape** — another way to say one key's value: an input definition of
+  its own and the conversion to and from the key's canonical definition,
+  which stays what is stored. Any module may contribute one; a caller
+  sends the canonical or any shape, and a form display chooses which to
+  ask for — see [Shapes](docs/shapes.md). Not the shape of a stored map,
+  which a variant decides, nor a target's storage shape.
 - **Target** — the destination accepted values are written to, and the
   place that knows the distance between the shape a surface describes and
   the shape storage wants. Config objects, config entities, base field
@@ -154,6 +160,10 @@ their configuration may change without a deprecation path.
   event, with no form alter anywhere; and, for content types, the same
   two settings added to core's own form the classic way, so the two can
   be compared.
+- **Data Surface Demo Duration** (`data_surface_demo_duration`) — a
+  module that owns nothing on the content type surface contributing
+  another way to say a value another module stores: the review deadline
+  as an ISO 8601 duration, beside the seconds and the amount and unit.
 - **Data Surface Demo - Node type** (`data_surface_demo_node_type`) — one
   surface serving an add form and an edit form, with a composite target,
   and two routes that name the generic provider form rather than a form
@@ -183,6 +193,7 @@ Full documentation is under [`docs/`](docs/).
 | [Installation](docs/installation.md) | Install, integrations, submodules. |
 | [Declaring a surface](docs/declaring-a-surface.md) | Attribute versus runtime, defaults, locking, required. |
 | [Nesting](docs/nesting.md) | Mounts and slots: shape is declared, values are refined. |
+| [Shapes](docs/shapes.md) | Contributed inputs beside a key's canonical: the matching rule, both gates, the display choice, emission. |
 | [The pipeline](docs/pipeline.md) | Access, accept, validate, prepare, commit; dry runs; exceptions. |
 | [Value semantics](docs/semantics.md) | Configured or not, the casting table, shape mismatches. |
 | [Outputs](docs/outputs.md) | Declaring what a host emits, the Omitted sentinel, conformance. |

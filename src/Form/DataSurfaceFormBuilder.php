@@ -79,8 +79,14 @@ class DataSurfaceFormBuilder implements DataSurfaceFormBuilderInterface {
   /**
    * {@inheritdoc}
    */
-  public function buildSurfaceForm(DataSurfaceInterface $surface, array $values, FormStateInterface $form_state, string $wrapper_key = 'data-surface'): array {
+  public function buildSurfaceForm(DataSurfaceInterface $surface, array $values, FormStateInterface $form_state, string $wrapper_key = 'data-surface', array $shape_display = []): array {
     $surface = $surface->refine($values);
+    $definitions = $surface->getDefinitions();
+    // Which keys are shown in a contributed shape rather than as their
+    // canonical: the host's choice, kept where the surface takes it. It
+    // rides on the container as a plain array, because extraction has to
+    // read each key back through the definition it was drawn with.
+    $display = SurfaceShapeDisplay::resolve($definitions, $shape_display);
     // One id per built container, not one per plugin. Two placements of
     // the same block on one page, or one block rendered twice by Layout
     // Builder, would otherwise share a wrapper id and each rebuild would
@@ -95,8 +101,8 @@ class DataSurfaceFormBuilder implements DataSurfaceFormBuilderInterface {
       '#attributes' => ['id' => $wrapper_id],
       '#process' => $this->surfaceProcess('container'),
       self::WRAPPER_KEY => $wrapper_id,
+      SurfaceShapeDisplay::ELEMENT_KEY => $display,
     ];
-    $definitions = $surface->getDefinitions();
     $dependencies = $definitions->refinementDependencies();
     foreach ($definitions as $name => $definition) {
       $slot = $definitions->entry($name)?->slot;
@@ -126,6 +132,8 @@ class DataSurfaceFormBuilder implements DataSurfaceFormBuilderInterface {
         $chosen = (string) $slot->chosen($values[$slot->by] ?? $surface->getDefault($slot->by));
         $value = $slot->fits($chosen, $value) ? $value : $slot->defaultsOf($chosen);
       }
+      $value = SurfaceShapeDisplay::value($definition, $value, (string) $name, $display);
+      $definition = SurfaceShapeDisplay::definition($definition, (string) $name, $display);
       $element = $this->widgetManager->getWidgetFor($definition)->buildElement($definition, $value);
       if ($definitions->isLocked($name)) {
         // Visible but fixed: the consumer sees the key and its value and
@@ -364,13 +372,15 @@ class DataSurfaceFormBuilder implements DataSurfaceFormBuilderInterface {
     $container = static::findSurfaceContainer($container);
     $raw = [];
     $definitions = $surface->getDefinitions();
+    $display = $container[SurfaceShapeDisplay::ELEMENT_KEY] ?? [];
+    $display = is_array($display) ? $display : [];
     $slots = [];
     foreach ($definitions->entries() as $name => $entry) {
       if ($entry->slot !== NULL) {
         $slots[] = $name;
         continue;
       }
-      $raw += $this->extractKey($name, $entry->definition, $container, $form_state);
+      $raw += $this->extractKey($name, $entry->definition, $container, $form_state, $display);
     }
     if ($slots !== []) {
       // A slot's element is the chosen variant's, so it is read through
@@ -378,7 +388,7 @@ class DataSurfaceFormBuilder implements DataSurfaceFormBuilderInterface {
       // this same submission.
       $resolved = $definitions->withSlotsResolved($raw + $current);
       foreach ($slots as $name) {
-        $raw += $this->extractKey($name, $resolved->get($name), $container, $form_state);
+        $raw += $this->extractKey($name, $resolved->get($name), $container, $form_state, $display);
       }
     }
     // One coercion path for every caller: the form hands its raw tree to
@@ -398,20 +408,23 @@ class DataSurfaceFormBuilder implements DataSurfaceFormBuilderInterface {
    *   The surface container.
    * @param \Drupal\Core\Form\FormStateInterface $form_state
    *   The form state.
+   * @param array<string, string> $display
+   *   The shapes the container was drawn with, by dotted key.
    *
    * @return array
    *   The raw value keyed by surface key, or nothing for a key with no
    *   element: it was never offered, so it has nothing to say, and
-   *   accept() keeps whatever the key already holds.
+   *   accept() keeps whatever the key already holds. A key drawn in a
+   *   shape comes back in the selector naming it.
    */
-  protected function extractKey(string $name, ?DataDefinitionInterface $definition, array $container, FormStateInterface $form_state): array {
+  protected function extractKey(string $name, ?DataDefinitionInterface $definition, array $container, FormStateInterface $form_state, array $display = []): array {
     if ($definition === NULL || !isset($container[$name]) || !is_array($container[$name])) {
       return [];
     }
-    return [
-      $name => $this->widgetManager->getWidgetFor($definition)
-        ->extractValue($definition, $container[$name], $form_state, [$name]),
-    ];
+    $drawn = SurfaceShapeDisplay::definition($definition, $name, $display);
+    $raw = $this->widgetManager->getWidgetFor($drawn)
+      ->extractValue($drawn, $container[$name], $form_state, [$name]);
+    return [$name => SurfaceShapeDisplay::wrap($definition, $raw, $name, $display)];
   }
 
   /**

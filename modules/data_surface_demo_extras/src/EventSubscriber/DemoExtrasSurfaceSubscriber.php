@@ -103,20 +103,22 @@ final class DemoExtrasSurfaceSubscriber implements EventSubscriberInterface {
    * Everything the classic form alter keeps in form code is said here as
    * contract, where every caller of the surface reads it:
    *
-   * - The deadline is asked for the way a person says it, an amount and
-   *   a unit, and stored as the seconds the classic form stores. The
-   *   conversion is a storage shape handed to the surface, which the
-   *   target that writes third party settings applies to this module's
-   *   namespace in prepare; the classic form does the same arithmetic,
-   *   NodeTypeReviewSettings::seconds(), in its element validator, where
-   *   no caller that skips the form reads it. The unit is part of the
-   *   contract, so a caller names it rather than inferring it from the
-   *   stored integer's bounds, and business days, which no reading of
-   *   those bounds can answer, are one more choice. The range is
-   *   checked twice, and both gates hold: on the amount and unit a
-   *   caller sent, in the caller's units, and on the stored seconds by
-   *   the config schema's own Range when the target validates what it
-   *   is about to write.
+   * - The deadline's canonical is what is stored: an integer of seconds
+   *   with the Range the config schema declares, and this time a
+   *   description that names the unit. Beside it this module contributes
+   *   the way a person says it, an amount and a unit, as a shape; the
+   *   pipeline converts the pair to seconds in prepare, and the classic
+   *   form does the same arithmetic, NodeTypeReviewSettings::seconds(),
+   *   in its element validator, where no caller that skips the form
+   *   reads it. In the shape the unit is part of the contract, so a
+   *   caller names it rather than inferring it from the stored integer's
+   *   bounds, and business days, which no reading of those bounds can
+   *   answer, are one more choice. Both gates hold: the pair's own
+   *   constraint judges it in the caller's units, then the canonical's
+   *   Range judges the seconds it becomes, and the target's config
+   *   schema check judges them once more when it validates what it is
+   *   about to write. Other modules may contribute more shapes; see
+   *   data_surface_demo_duration.
    * - The tags are a list of strings, which is the classic form's comma
    *   split said as a type: a caller sends a list and there is nothing to
    *   split. What the classic form then does to each tag — trims it,
@@ -135,6 +137,19 @@ final class DemoExtrasSurfaceSubscriber implements EventSubscriberInterface {
    *   The build event carrying the mutable builder.
    */
   protected function extendNodeType(DataSurfaceBuildEvent $event): void {
+    // The canonical: what is stored, said exactly as the config schema
+    // says it, unit included this time.
+    $deadline = DataDefinition::create('integer')
+      ->setLabel($this->t('Review deadline'))
+      ->setDescription($this->t('How long an editor has to review new content of this type, in seconds, from one hour (3600) to thirty days (2592000). Leave it empty for no deadline.'))
+      ->addConstraint('Range', [
+        'min' => NodeTypeReviewSettings::DEADLINE_MIN,
+        'max' => NodeTypeReviewSettings::DEADLINE_MAX,
+      ]);
+    DefinitionMetadata::setExamples($deadline, [604800]);
+    $event->builder->setThirdPartyDefinition(self::PROVIDER, NodeTypeReviewSettings::DEADLINE, $deadline);
+
+    // The way a person says it, contributed as a shape beside it.
     $unit = DataDefinition::create('string')
       ->setLabel($this->t('Unit'))
       ->addConstraint('LabeledChoice', [
@@ -147,19 +162,23 @@ final class DemoExtrasSurfaceSubscriber implements EventSubscriberInterface {
         ],
       ]);
     DefinitionMetadata::setDefaultValue($unit, NodeTypeReviewSettings::DEFAULT_UNIT);
-    $event->builder->setThirdPartyDefinition(
+    $amount_unit = MapDataDefinition::create()
+      ->setLabel($this->t('Amount and unit'))
+      ->setDescription($this->t('How long an editor has to review new content of this type, from one hour to thirty days. Leave the amount empty for no deadline.'))
+      ->setPropertyDefinition(NodeTypeReviewSettings::AMOUNT, DataDefinition::create('integer')
+        ->setLabel($this->t('Amount'))
+        ->addConstraint('Range', ['min' => 1]))
+      ->setPropertyDefinition(NodeTypeReviewSettings::UNIT, $unit)
+      ->addConstraint('DataSurfaceDemoExtrasReviewDeadline', []);
+    DefinitionMetadata::setExamples($amount_unit, [
+      [NodeTypeReviewSettings::AMOUNT => 1, NodeTypeReviewSettings::UNIT => 'weeks'],
+    ]);
+    $event->builder->addShape(
+      NodeTypeReviewSettings::DEADLINE_KEY,
+      ReviewDeadlineShape::ID,
+      new ReviewDeadlineShape($amount_unit),
       self::PROVIDER,
-      NodeTypeReviewSettings::DEADLINE,
-      MapDataDefinition::create()
-        ->setLabel($this->t('Review deadline'))
-        ->setDescription($this->t('How long an editor has to review new content of this type, from one hour to thirty days. Leave the amount empty for no deadline.'))
-        ->setPropertyDefinition(NodeTypeReviewSettings::AMOUNT, DataDefinition::create('integer')
-          ->setLabel($this->t('Amount'))
-          ->addConstraint('Range', ['min' => 1]))
-        ->setPropertyDefinition(NodeTypeReviewSettings::UNIT, $unit)
-        ->addConstraint('DataSurfaceDemoExtrasReviewDeadline', []),
     );
-    $event->builder->setThirdPartyShape(self::PROVIDER, new ReviewDeadlineShape());
     $tag = DataDefinition::create('string')
       ->setLabel($this->t('Audience tag'))
       ->addConstraint('Regex', [

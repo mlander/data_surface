@@ -242,13 +242,21 @@ interface DataSurfaceBuilderInterface {
   /**
    * Says how a provider's mounted settings are written down.
    *
-   * A contributor may ask a caller for a value in one shape and store it
-   * in another — a duration asked for as an amount and a unit and stored
-   * as a number of seconds. The owner's target cannot know that, and the
-   * contributor does not build the target, so the translation travels on
-   * the surface: a target that writes third-party settings applies the
-   * provider's shape to that provider's namespace, toStorage() on the
-   * way in and fromStorage() on the way out, and to nothing else.
+   * A storage translation over a whole namespace: the mounted
+   * definitions describe what a caller sends, and storage holds something
+   * the surface never declares. Prefer addShape() for new code. It
+   * declares what is stored as the key's canonical definition and
+   * contributes the friendlier input as a shape beside it, so the stored
+   * shape is advertised, a caller may send either, and every target —
+   * not only the one that writes third party settings — sees canonical
+   * values. This method stays for a namespace whose storage shape cannot
+   * be declared as definitions.
+   *
+   * The owner's target cannot know about the translation, and the
+   * contributor does not build the target, so it travels on the surface:
+   * a target that writes third-party settings applies the provider's
+   * shape to that provider's namespace, toStorage() on the way in and
+   * fromStorage() on the way out, and to nothing else.
    *
    * The shape sees the provider's settings only, keyed by the keys the
    * provider mounted, and must be pure — the SettingsShapeInterface
@@ -269,6 +277,60 @@ interface DataSurfaceBuilderInterface {
    * @see \Drupal\data_surface\Target\ConfigEntityTarget
    */
   public function setThirdPartyShape(string $provider, SettingsShapeInterface $shape): static;
+
+  /**
+   * Contributes another way to say a key's value.
+   *
+   * The key's definition is its canonical contract and stays exactly as
+   * its owner declared it: the canonical value is always accepted, and it
+   * is what is stored. A shape is an additive alternate — its own input
+   * definition, and the conversion to and from the canonical — that any
+   * module may contribute from the build event, including one that does
+   * not own the key. A policy filter may remove one; nothing may alter
+   * the canonical.
+   *
+   * On accept the canonical is tried first, then each shape in the order
+   * they were added: an input is read by the first whose definition it
+   * fits and validates against. A payload may name the shape it means
+   * with the DataSurfacePipelineInterface::SHAPE selector instead. The
+   * shape's own constraints judge what was sent, then toCanonical(), then
+   * the canonical's constraints judge the result. The conversion happens
+   * in prepare, so a target only ever sees canonical values.
+   *
+   * Recorded now and attached at seal, so a contributor may add a shape
+   * before the key's owner has declared it — subscribers run in module
+   * order, not in ownership order. Sealing refuses:
+   * - a key the surface does not declare, or one inside a mount or a
+   *   slot, which is the child's to shape from its own build event;
+   * - a key typed `any`, a list, or a secret;
+   * - a top-level key another key refines against, because a refiner
+   *   reads the value as it was sent;
+   * - two readings of the key that one input could fit — the same data
+   *   type family, or maps sharing a property — naming the two.
+   *
+   * @param string $key
+   *   The surface key, dotted to reach into a map:
+   *   `third_party_settings.my_module.my_setting` for a key another
+   *   module mounted.
+   * @param string $id
+   *   The shape's id, unique on the key, never starting with "@". It is
+   *   what a payload's selector and a form display name it by.
+   * @param \Drupal\data_surface\DataSurfaceShapeInterface $shape
+   *   The shape.
+   * @param string|null $contributor
+   *   The module contributing it, or NULL for the surface's owner.
+   *
+   * @return $this
+   *
+   * @throws \InvalidArgumentException
+   *   When the id is empty or starts with "@".
+   * @throws \LogicException
+   *   When the key already has a shape with that id, or the builder is
+   *   sealed.
+   *
+   * @see docs/shapes.md
+   */
+  public function addShape(string $key, string $id, DataSurfaceShapeInterface $shape, ?string $contributor = NULL): static;
 
   /**
    * Fixes a nested surface at one key.

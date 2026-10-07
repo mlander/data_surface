@@ -7,6 +7,7 @@ namespace Drupal\data_surface\Refinement;
 use Drupal\Core\TypedData\ComplexDataDefinitionInterface;
 use Drupal\Core\TypedData\DataDefinitionInterface;
 use Drupal\Core\TypedData\ListDataDefinitionInterface;
+use Drupal\data_surface\DefinitionMetadata;
 
 /**
  * The check that refinement only ever narrows.
@@ -34,6 +35,8 @@ use Drupal\Core\TypedData\ListDataDefinitionInterface;
  * | Removing a constraint | refused |
  * | Replacing the options of any other constraint | refused |
  * | Adding or removing a map property | refused |
+ * | Removing a contributed shape | narrower |
+ * | Adding or replacing a contributed shape | refused |
  * | Anything above, inside a map property or a list item | as above |
  *
  * The last row is the conservative half: two Regex patterns cannot be
@@ -186,6 +189,17 @@ final class Narrowing {
   protected static function ownWidening(DataDefinitionInterface $before, DataDefinitionInterface $after): ?string {
     if ($before->isRequired() && !$after->isRequired()) {
       return 'the required flag was turned off';
+    }
+    $shapes = DefinitionMetadata::getShapes($before);
+    foreach (DefinitionMetadata::getShapes($after) as $id => $shape) {
+      if (!isset($shapes[$id])) {
+        return sprintf('the %s shape was added', $id);
+      }
+      // By identity: refinement copies a definition but shares the shapes
+      // it carries, so anything else is a shape somebody built anew.
+      if ($shape !== $shapes[$id]) {
+        return sprintf('the %s shape was replaced', $id);
+      }
     }
     $refined = $after->getConstraints();
     foreach ($before->getConstraints() as $name => $options) {

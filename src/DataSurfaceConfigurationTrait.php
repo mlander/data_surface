@@ -188,7 +188,10 @@ trait DataSurfaceConfigurationTrait {
       // message is a string and has nowhere to put an object.
       throw new \InvalidArgumentException('Invalid configuration: ' . ViolationSummary::fromViolations($violations));
     }
-    $this->configuration = $values + array_diff_key($configuration, $definitions);
+    // What a plugin keeps is what storage would hold: a value handed
+    // over in a contributed shape is kept as its canonical, the same
+    // conversion a target is handed in prepare.
+    $this->configuration = $pipeline->canonical($surface, $values) + array_diff_key($configuration, $definitions);
     return $this;
   }
 

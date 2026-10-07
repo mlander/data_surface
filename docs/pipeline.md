@@ -133,6 +133,13 @@ The rules it applies — what counts as configured, the casting table, how
 lists and maps merge — are [Value semantics](semantics.md), which is the
 reference for this page.
 
+A key that takes contributed [shapes](shapes.md) is read by the matching
+rule, or in the shape a payload names with the reserved `@shape` key
+(`DataSurfacePipelineInterface::SHAPE`, beside `@value`, in the same `@`
+namespace as `@access`). A value read in a shape leaves `accept()` as that
+selector, unconverted; `validate()` runs both gates on it, and `prepare()`
+converts it.
+
 ### validate
 
 ```php
@@ -234,6 +241,11 @@ Hands the values to a target for shaping. Writes nothing. Answers with a
 and any calculated `dependencies`. This is the preview artifact —
 everything a renderer or a diff needs, nothing stored.
 
+Every value sent in a contributed shape is converted to its canonical
+first, by `canonical()`, so a target only ever sees canonical values. A
+host that stores accepted values itself, without a target, calls
+`canonical()` for the same reason.
+
 ### commit
 
 ```php
@@ -253,9 +265,10 @@ caller reads one result rather than orchestrating five calls. The target
 is both where current values are read from and where the result is
 written.
 
-`DataSurfaceResult` carries `values`, `violations`, the `prepared`
-artifact when the values were valid, `committed`, and the `access` answer
-the run was gated by. `isValid()` is the question most callers ask.
+`DataSurfaceResult` carries `values` — canonical once the run reached
+prepare, so a valid result reports what was stored — `violations`, the
+`prepared` artifact when the values were valid, `committed`, and the
+`access` answer the run was gated by. `isValid()` is the question most callers ask.
 
 A committed result can still carry violations, and there is exactly one
 way that happens: the set holds stale references and nothing else. They

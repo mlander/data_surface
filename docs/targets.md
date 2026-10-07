@@ -240,6 +240,15 @@ array`. `FieldSettingsTarget` takes one, optionally; without one the
 surface shape is the storage shape. It is also where encryption sits,
 below.
 
+A storage shape and a contributed [shape](shapes.md) answer different
+questions. A storage shape says how a whole set of values is written
+down when storage holds something the surface does not declare; a
+contributed shape is another input for one key whose canonical
+definition already *is* what is stored, converted by the pipeline in
+prepare so the target never sees it. Where the stored value can be
+declared as definitions — which a config schema requires anyway —
+prefer declaring it and contributing the friendlier input as a shape.
+
 It exists because storage shapes are frequently not the shape a person
 or an agent should be asked for. The address field type stores its
 countries as a map of each code to itself, wraps every field override in
@@ -272,11 +281,14 @@ actually be stored; `fromStorage()` on load. The shape sees only the
 provider's own settings, keyed by the keys it mounted. Sealing refuses a
 shape for a provider that mounts nothing.
 
-`data_surface_demo_extras` is the worked example: it asks for a content
-type's review deadline as an amount and a unit and stores seconds,
-through the node type demo's composite target, which knows nothing about
-it. Only `ConfigEntityTarget` writes third party settings today, so it
-is the only target that reads the shape.
+`data_surface_demo_extras` used to be the worked example, asking for a
+content type's review deadline as an amount and a unit and storing
+seconds through this mechanism. It now declares the seconds as the key's
+canonical and contributes the amount and unit as a [shape](shapes.md),
+which every target honors because the pipeline converts it before the
+target is called; `setThirdPartyShape()` stays for a namespace whose
+storage cannot be declared. Only `ConfigEntityTarget` writes third party
+settings today, so it is the only target that reads a storage shape.
 
 ## Secrets at the codec
 

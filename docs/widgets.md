@@ -133,6 +133,18 @@ form state it is absolute in; an element with no `#parents` has not been
 processed at all (programmatic use, kernel tests) and is read at
 `$fallback_parents`, relative to the state handed over.
 
+## A widget is not a shape
+
+Core keeps the alternative inputs of a value in its widgets: the date
+list widget and the default datetime widget take different inputs for
+one stored string. Here a widget only draws a definition. When a key
+should accept a different input — an amount and a unit for a number of
+seconds, an ISO 8601 duration — that is a [shape](shapes.md): a second
+definition and a conversion, contributed to the surface, so a payload
+and a tool reach it as well as a form. A form displaying the shape
+swaps the key's definition for the shape's input definition, and the
+stock widgets draw that like any other definition, none the wiser.
+
 ## Writing a widget
 
 ```php

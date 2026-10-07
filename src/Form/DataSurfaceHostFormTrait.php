@@ -137,7 +137,7 @@ trait DataSurfaceHostFormTrait {
     // host's fragment is the host's element, and a union would hand the
     // surface's container type, attributes and tree flag to it.
     return $builder->mergeSurfaceContainer(
-      $builder->buildSurfaceForm($surface, $values, $form_state, $this->surfaceWrapperKey()),
+      $builder->buildSurfaceForm($surface, $values, $form_state, $this->surfaceWrapperKey(), $this->surfaceShapeDisplay()),
       $form,
     );
   }

@@ -11,6 +11,7 @@ use Drupal\Core\Url;
 use Drupal\data_surface\DataSurfaceInterface;
 use Drupal\data_surface\Form\DataSurfaceFormCosmeticsInterface;
 use Drupal\data_surface\Form\DataSurfaceProviderForm;
+use Drupal\data_surface\Form\DataSurfaceShapeDisplayInterface;
 use Drupal\data_surface\Pipeline\DataSurfaceResult;
 use Drupal\data_surface_demo_node_type\NodeTypeSurfaceProvider;
 
@@ -25,9 +26,23 @@ use Drupal\data_surface_demo_node_type\NodeTypeSurfaceProvider;
  * Deleting this class yields the same flat working form, which is the
  * test of whether a cosmetic layer is really cosmetic.
  */
-final class NodeTypeSurfaceFormCosmetics implements DataSurfaceFormCosmeticsInterface {
+final class NodeTypeSurfaceFormCosmetics implements DataSurfaceFormCosmeticsInterface, DataSurfaceShapeDisplayInterface {
 
   use StringTranslationTrait;
+
+  /**
+   * The keys this form asks for in a contributed shape, by dotted key.
+   *
+   * The form display setting of this page. A review deadline is stored
+   * as seconds, and a person is asked for an amount and a unit instead:
+   * the shape data_surface_demo_extras contributes beside the seconds.
+   * This module knows nothing else about that module, and needs to know
+   * nothing: a choice naming a key or a shape the surface does not have
+   * is ignored, so without the extras module this says nothing at all.
+   */
+  public const SHAPES = [
+    'third_party_settings.data_surface_demo_extras.review_deadline' => 'amount_unit',
+  ];
 
   /**
    * Constructs a NodeTypeSurfaceFormCosmetics object.
@@ -121,6 +136,13 @@ final class NodeTypeSurfaceFormCosmetics implements DataSurfaceFormCosmeticsInte
     return $operation === NodeTypeSurfaceProvider::OPERATION_ADD
       ? $this->t('The content type %name has been added.', ['%name' => $result->values['name']])
       : $this->t('The content type %name has been updated.', ['%name' => $result->values['name']]);
+  }
+
+  /**
+   * {@inheritdoc}
+   */
+  public function surfaceFormShapes(DataSurfaceInterface $surface, string $operation, ?string $subject): array {
+    return self::SHAPES;
   }
 
   /**

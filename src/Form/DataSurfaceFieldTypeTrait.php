@@ -235,6 +235,7 @@ trait DataSurfaceFieldTypeTrait {
       $values,
       $form_state,
       'data-surface-field-settings-' . $field->getName(),
+      $this->surfaceShapeDisplay(),
     );
     // Identifiers, not objects: the static callback rebuilds the item,
     // the surface and the target from the field this settings form is

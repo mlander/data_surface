@@ -171,6 +171,7 @@ class DataSurfaceProviderForm extends FormBase {
     }
 
     $surface = $provider->getDataSurface($operation, $subject);
+    $cosmetics = $this->surfaceCosmetics($provider);
     $form[static::SURFACE_KEY] = $this->surfaceFormBuilder()->buildSurfaceForm(
       $surface,
       $this->surfaceFormValues($surface, array_replace(
@@ -179,6 +180,7 @@ class DataSurfaceProviderForm extends FormBase {
       ), $form_state),
       $form_state,
       $this->surfaceWrapperKey($operation, $subject),
+      $this->surfaceFormShapes($provider, $cosmetics, $surface, $operation, $subject),
     );
     $form['actions'] = [
       '#type' => 'actions',
@@ -189,7 +191,6 @@ class DataSurfaceProviderForm extends FormBase {
       ],
     ];
 
-    $cosmetics = $this->surfaceCosmetics($provider);
     return $cosmetics === NULL
       ? $form
       : $cosmetics->alterSurfaceForm($form, $surface, $form_state, $operation, $subject);
@@ -338,6 +339,38 @@ class DataSurfaceProviderForm extends FormBase {
       ));
     }
     return $cosmetics;
+  }
+
+  /**
+   * Gets which keys this form asks for in a contributed shape.
+   *
+   * Found where the cosmetic layer is found, and for the same reason:
+   * it is presentation. The route's cosmetics service answers when it
+   * implements DataSurfaceShapeDisplayInterface, and otherwise the
+   * provider does when it does; with neither, every key renders as its
+   * canonical.
+   *
+   * @param \Drupal\data_surface\DataSurfaceProviderInterface $provider
+   *   The provider this route serves.
+   * @param \Drupal\data_surface\Form\DataSurfaceFormCosmeticsInterface|null $cosmetics
+   *   The cosmetic layer, if there is one.
+   * @param \Drupal\data_surface\DataSurfaceInterface $surface
+   *   The surface being built.
+   * @param string $operation
+   *   The operation.
+   * @param string|null $subject
+   *   The subject, or NULL.
+   *
+   * @return array<string, string>
+   *   Dotted surface key => shape id.
+   */
+  protected function surfaceFormShapes(DataSurfaceProviderInterface $provider, ?DataSurfaceFormCosmeticsInterface $cosmetics, DataSurfaceInterface $surface, string $operation, ?string $subject): array {
+    foreach ([$cosmetics, $provider] as $candidate) {
+      if ($candidate instanceof DataSurfaceShapeDisplayInterface) {
+        return $candidate->surfaceFormShapes($surface, $operation, $subject);
+      }
+    }
+    return [];
   }
 
   /**

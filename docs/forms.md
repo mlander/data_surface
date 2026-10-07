@@ -423,6 +423,21 @@ Two more things these hosts force:
   must therefore appear in that static array too, which is why
   `surfaceDefaultSettings()` always declares `third_party_settings`.
 
+## Asking for a key in a shape
+
+A key that takes contributed [shapes](shapes.md) renders as its
+canonical definition unless the host's form display names a shape for
+it, as a small serializable array of dotted key to shape id. A plugin
+host overrides `DataSurfaceHostTrait::surfaceShapeDisplay()`; a provider
+form's cosmetics service or provider implements
+`DataSurfaceShapeDisplayInterface`; a form of your own passes the array
+to `buildSurfaceForm()`. The builder swaps the key's definition for the
+shape's input, shows the stored value through `fromCanonical()`, says so
+when the shape is lossy, and carries the choice on the container, so
+extraction hands the pipeline each displayed value in the `@shape`
+selector. A choice naming something the surface does not have is
+ignored.
+
 ## The generic provider form
 
 A provider answers three questions about one coordinate — surface,
@@ -488,6 +503,10 @@ the whole of what a form class is still for:
 | `alterSurfaceForm()` | How the built elements are arranged. Runs after every element exists, including the actions. |
 | `surfaceFormMessage()` | What the person is told. NULL for the generic sentence. |
 | `surfaceFormRedirect()` | Where they are sent. NULL to stay on the form. |
+
+A cosmetic layer may also implement `DataSurfaceShapeDisplayInterface`
+to choose which keys are asked for in a contributed shape; see [Asking
+for a key in a shape](#asking-for-a-key-in-a-shape).
 
 A route names one, or the provider implements the interface itself when
 its presentation is the same wherever it is served from.

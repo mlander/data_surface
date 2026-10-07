@@ -15,8 +15,10 @@ use Drupal\data_surface\DataSurfaceInterface;
 use Drupal\data_surface\DefinitionMap;
 use Drupal\data_surface\DefinitionMetadata;
 use Drupal\data_surface\Options\DataSurfaceOptions;
+use Drupal\data_surface\Pipeline\DataSurfacePipelineInterface;
 use Drupal\data_surface\Pipeline\ValueState;
 use Drupal\data_surface\SurfaceEntry;
+use Drupal\data_surface\SurfaceShape;
 use Drupal\data_surface\SurfaceSlot;
 use Drupal\tool\TypedData\InputDefinition;
 use Drupal\tool\TypedData\InputDefinitionInterface;
@@ -52,8 +54,11 @@ use Drupal\tool\TypedData\OutputDefinitionInterface;
  * Two things a surface knows survive the conversion only in part, and
  * both are Tool API gaps rather than choices made here:
  * - Example values. DefinitionMetadata carries them on a definition and
- *   JSON Schema has the keyword, but a context definition has nowhere to
- *   put them, so they are dropped.
+ *   JSON Schema has the keyword, and the Tool API's input definitions
+ *   now carry them too, but this converter passes them on only for the
+ *   union of a key that takes contributed shapes, where they are the one
+ *   way left to show each reading (fromShaped() says why). Carrying them
+ *   for every key is a follow-up, and it changes every emitted schema.
  * - Type settings. Core's data definitions carry a settings array; a
  *   context definition does not, and rebuilds its data definition from
  *   the data type alone, so settings are dropped too.
@@ -67,7 +72,9 @@ use Drupal\tool\TypedData\OutputDefinitionInterface;
  * discriminator holds a value is exactly that variant's map. A slot
  * whose discriminator holds nothing is the union of its variants —
  * fromSlot() says why that is the widest honest schema the Tool API
- * can carry and what it cannot say.
+ * can carry and what it cannot say. A key that takes contributed shapes
+ * is a union too, of its canonical and each shape, decided by the value
+ * itself; fromShaped() says what of it the Tool API can carry.
  *
  * One Tool API gap is worth naming here rather than in a method
  * docblock, because it is why the two tools in this module still
@@ -436,6 +443,9 @@ final class SurfaceInputDefinitions {
    *   The input definition.
    */
   public function fromDefinition(DataDefinitionInterface $definition): InputDefinitionInterface {
+    if (DefinitionMetadata::getShapes($definition) !== []) {
+      return $this->fromShaped($definition);
+    }
     $label = $this->label($definition);
     $description = $this->description($definition);
     $constraints = $this->constraints($definition);
@@ -487,6 +497,128 @@ final class SurfaceInputDefinitions {
       default_value: $default,
       constraints: $constraints,
     );
+  }
+
+  /**
+   * Converts a key that takes contributed shapes: the union, in words.
+   *
+   * The precise JSON Schema is a `oneOf` at the key: the canonical's
+   * schema, each shape's input schema, and the selector object naming
+   * one. The Tool API cannot carry it. An input definition holds one
+   * data type, the normalizer writes a schema from that type and its
+   * constraints and nothing else, and the normalize event only swaps one
+   * definition for another, so no subscriber can write a `oneOf` either.
+   * Unlike a slot's union this one is per key — the discriminator is the
+   * value itself, not a sibling — which is the one piece that makes the
+   * gap smaller than the slot's: the key is an `any`, which advertises no
+   * false bound, and the Tool API then lets every reading through to the
+   * pipeline.
+   *
+   * So the key converts as `any` carrying no constraints, because any of
+   * the canonical's would refuse every shape before the tool ran. What
+   * each reading takes is said in the description, each shape attributed
+   * to the module that contributed it, and shown in `examples`: every
+   * example the canonical and each shape declare, and one selector. Both
+   * gates still run, in the pipeline, which is where every reading is
+   * judged.
+   *
+   * @param \Drupal\Core\TypedData\DataDefinitionInterface $definition
+   *   The canonical definition, carrying its shapes.
+   *
+   * @return \Drupal\tool\TypedData\InputDefinitionInterface
+   *   The input definition.
+   */
+  protected function fromShaped(DataDefinitionInterface $definition): InputDefinitionInterface {
+    $readings = [$this->t('its own value, @what', ['@what' => $this->describeValue($definition)])];
+    $examples = DefinitionMetadata::getExamples($definition);
+    $selector = NULL;
+    foreach (DefinitionMetadata::getShapes($definition) as $id => $shape) {
+      $input = $shape->shape->getInputDefinition();
+      $readings[] = $this->t('the @id shape from @contributor, @label: @what', [
+        '@id' => $id,
+        '@contributor' => $shape->contributor === DataSurfaceInterface::OWNER ? $this->t('the surface owner') : $shape->contributor,
+        '@label' => $this->label($input),
+        '@what' => $this->describeValue($input),
+      ]);
+      $shape_examples = DefinitionMetadata::getExamples($input);
+      $examples = array_merge($examples, $shape_examples);
+      if ($selector === NULL && $shape_examples !== []) {
+        $selector = SurfaceShape::select((string) $id, reset($shape_examples));
+      }
+    }
+    if ($selector !== NULL) {
+      $examples[] = $selector;
+    }
+    $note = $this->t('Send one of: @readings. A value is read as the first of these it fits and satisfies; to say which one you mean, send {"@shape_key": "<shape id>", "@value_key": <the value>} instead.', [
+      '@readings' => implode('; ', array_map('strval', $readings)),
+      '@shape_key' => DataSurfacePipelineInterface::SHAPE,
+      '@value_key' => DataSurfacePipelineInterface::SHAPE_VALUE,
+    ]);
+    return new InputDefinition(
+      data_type: 'any',
+      label: $this->label($definition),
+      description: $this->appended($this->description($definition), $note),
+      required: $this->requiredInPayload($definition),
+      default_value: DefinitionMetadata::hasDefaultValue($definition) ? DefinitionMetadata::getDefaultValue($definition) : NULL,
+      examples: array_values($examples),
+    );
+  }
+
+  /**
+   * Says in words what kind of value a definition takes.
+   *
+   * Only for the readings of a shaped key, whose schemas cannot travel:
+   * the data type, and the bounds, pattern and allowed values the Tool
+   * API would otherwise have turned into keywords.
+   *
+   * @param \Drupal\Core\TypedData\DataDefinitionInterface $definition
+   *   The definition.
+   *
+   * @return string
+   *   The description.
+   */
+  protected function describeValue(DataDefinitionInterface $definition): string {
+    if ($definition instanceof ListDataDefinitionInterface) {
+      return (string) $this->t('a list of @items', ['@items' => $this->describeValue($definition->getItemDefinition())]);
+    }
+    $properties = $definition instanceof ComplexDataDefinitionInterface ? $definition->getPropertyDefinitions() : [];
+    if ($properties !== []) {
+      $parts = [];
+      foreach ($properties as $name => $property) {
+        $parts[] = $this->t('@name (@what)', ['@name' => $name, '@what' => $this->describeValue($property)]);
+      }
+      return (string) $this->t('an object of @properties', ['@properties' => implode(', ', array_map('strval', $parts))]);
+    }
+    $words = [
+      match ($definition->getDataType()) {
+        'integer' => (string) $this->t('an integer'),
+        'float' => (string) $this->t('a number'),
+        'boolean' => (string) $this->t('a boolean'),
+        'string' => (string) $this->t('a string'),
+        default => (string) $this->t('a value of type @type', ['@type' => $definition->getDataType()]),
+      },
+    ];
+    $constraints = $definition->getConstraints();
+    $range = $constraints['Range'] ?? NULL;
+    if (is_array($range) && isset($range['min'], $range['max'])) {
+      $words[] = (string) $this->t('from @min to @max', ['@min' => $range['min'], '@max' => $range['max']]);
+    }
+    elseif (is_array($range) && isset($range['min'])) {
+      $words[] = (string) $this->t('of at least @min', ['@min' => $range['min']]);
+    }
+    elseif (is_array($range) && isset($range['max'])) {
+      $words[] = (string) $this->t('of at most @max', ['@max' => $range['max']]);
+    }
+    $regex = $constraints['Regex'] ?? NULL;
+    $pattern = is_array($regex) ? ($regex['pattern'] ?? NULL) : NULL;
+    if (is_string($pattern)) {
+      $words[] = (string) $this->t('matching @pattern', ['@pattern' => $pattern]);
+    }
+    $set = $this->options->resolve($definition);
+    if ($set !== NULL && $set->options !== []) {
+      $words[] = (string) $this->t('one of @values', ['@values' => implode(', ', array_map('strval', array_keys($set->options)))]);
+    }
+    return implode(' ', $words);
   }
 
   /**

@@ -27,9 +27,9 @@ each role has exactly one permission.
 
 | Role | When | May | May not |
 | --- | --- | --- | --- |
-| **Contributor** | Build time, on the build event | Add definitions under its own namespace, add values to an existing key, register refiners for what it added, declare cacheability | Add bare top-level keys, take anything away, contribute a value somebody already owns |
+| **Contributor** | Build time, on the build event | Add definitions under its own namespace, add values to an existing key, contribute a [shape](shapes.md) to any key, register refiners for what it added, declare cacheability | Add bare top-level keys, take anything away, contribute a value somebody already owns, alter a key's canonical definition |
 | **Contribution refiner** | Refinement, per request | Narrow the values its own contribution added, reading any key's value | Touch a value it did not contribute, hand back a value it was not given |
-| **Policy filter** | Refinement, after the union | Remove values from any key | Add anything back |
+| **Policy filter** | Refinement, after the union | Remove values from any key, remove a contributed shape | Add anything back |
 
 The surface's **owner** — the provider whose definitions these are — is
 simply the first contributor. Its own definitions, its refinement map
@@ -172,6 +172,8 @@ refused refinement.
 | Adding values to a list of allowed values | **refused** |
 | Replacing the options of any other constraint | **refused** |
 | Adding or removing a map property | **refused** |
+| Removing a contributed [shape](shapes.md) | narrower |
+| Adding or replacing a contributed shape | **refused** |
 | Any change above, inside a map property or a list item | judged by the same row |
 
 The map rows are the shape-versus-values rule enforced: a refined map

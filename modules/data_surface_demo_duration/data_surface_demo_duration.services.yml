@@ -1,0 +1,6 @@
+services:
+  data_surface_demo_duration.surface_subscriber:
+    class: Drupal\data_surface_demo_duration\EventSubscriber\DurationShapeSubscriber
+    arguments: ['@string_translation']
+    tags:
+      - { name: event_subscriber }

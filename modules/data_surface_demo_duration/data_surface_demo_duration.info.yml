@@ -1,0 +1,10 @@
+name: Data Surface Demo Duration
+type: module
+description: 'A module that does not own a key contributing another way to say its value: the review deadline as an ISO 8601 duration.'
+package: Data Surface
+lifecycle: experimental
+lifecycle_link: 'https://git.drupalcode.org/project/data_surface/-/blob/1.0.x/README.md#experimental-submodules'
+core_version_requirement: ^11.3 || ^12
+dependencies:
+  - data_surface:data_surface
+  - data_surface:data_surface_demo_extras

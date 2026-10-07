@@ -310,6 +310,26 @@ trait DataSurfaceHostTrait {
   }
 
   /**
+   * Gets which keys this host's form asks for in a contributed shape.
+   *
+   * The host's form display setting, read by every host family that
+   * builds a surface form through these traits: dotted key => shape id,
+   * as SurfaceShapeDisplay describes. Nothing by default, so every key
+   * renders as its canonical. A host that wants a friendlier input for
+   * a key overrides this; it is presentation, so it changes how a value
+   * is asked for and never what is stored, and a choice naming something
+   * the surface does not have is ignored.
+   *
+   * @return array<string, string>
+   *   The choice, keyed by dotted surface key.
+   *
+   * @see \Drupal\data_surface\Form\SurfaceShapeDisplay
+   */
+  protected function surfaceShapeDisplay(): array {
+    return [];
+  }
+
+  /**
    * Reads in-progress input from an AJAX refinement rebuild.
    *
    * When a person changes a value others refine against, the form

@@ -10,8 +10,10 @@ use Drupal\Core\Form\FormStateInterface;
 use Drupal\Core\Routing\RouteObjectInterface;
 use Drupal\Core\StringTranslation\TranslatableMarkup;
 use Drupal\data_surface\Form\DataSurfaceProviderForm;
+use Drupal\data_surface\SurfaceShape;
 use Drupal\data_surface_demo_extras\EventSubscriber\DemoExtrasSurfaceSubscriber;
 use Drupal\data_surface_demo_extras\NodeTypeReviewSettings;
+use Drupal\data_surface_demo_node_type\Form\NodeTypeSurfaceFormCosmetics;
 use Drupal\data_surface_demo_node_type_tool\Plugin\tool\Tool\NodeTypeAdd;
 use Drupal\data_surface_tool\SurfaceProviderToolBase;
 use Drupal\node\Entity\NodeType;
@@ -85,6 +87,7 @@ class NodeTypeToolComparisonTest extends DataSurfaceKernelTestBase {
     'data_surface',
     'data_surface_demo',
     'data_surface_demo_extras',
+    'data_surface_demo_duration',
     'data_surface_demo_node_type',
     'data_surface_tool',
     'data_surface_demo_node_type_tool',
@@ -122,9 +125,12 @@ class NodeTypeToolComparisonTest extends DataSurfaceKernelTestBase {
    * Tests what the surface driven tool advertises for the extension.
    *
    * Both review settings are in the advertised schema, labeled: the
-   * deadline as the amount and unit a person says, with the units named,
-   * and the tags as a list with the tag pattern. Every one of them is
-   * read off the surface, because nothing in the tool names them.
+   * deadline as the union of its readings — the seconds that are stored,
+   * now with their unit said, the amount and unit a person says, with
+   * the units named, and the ISO 8601 duration another module
+   * contributed — and the tags as a list with the tag pattern. Every one
+   * of them is read off the surface, because nothing in the tool names
+   * them. The union is in words: the Tool API cannot say `oneOf`.
    */
   public function testSurfaceToolAdvertisesTheExtension(): void {
     $schema = $this->surfaceSchema();
@@ -133,14 +139,17 @@ class NodeTypeToolComparisonTest extends DataSurfaceKernelTestBase {
 
     $deadline = $extras[NodeTypeReviewSettings::DEADLINE];
     $this->assertSame('Review deadline', $deadline['title']);
-    $this->assertStringContainsString('from one hour to thirty days', $deadline['description']);
-    $amount = $deadline['properties'][NodeTypeReviewSettings::AMOUNT];
-    $this->assertSame('Amount', $amount['title']);
-    $this->assertSame(1, $amount['minimum']);
-    $unit = $deadline['properties'][NodeTypeReviewSettings::UNIT];
-    // The unit is optional, so the Tool API lists null beside the units.
-    $this->assertSame(['hours', 'days', 'weeks', NodeTypeReviewSettings::BUSINESS_DAYS, NULL], $unit['enum']);
-    $this->assertSame(NodeTypeReviewSettings::DEFAULT_UNIT, $unit['default']);
+    $this->assertArrayNotHasKey('type', $deadline);
+    foreach ([
+      'in seconds, from one hour (3600) to thirty days (2592000)',
+      'its own value, an integer from 3600 to 2592000',
+      'the amount_unit shape from ' . self::EXTRAS,
+      'unit (a string one of hours, days, weeks, business_days)',
+      'the iso8601 shape from data_surface_demo_duration',
+    ] as $said) {
+      $this->assertStringContainsString($said, $deadline['description']);
+    }
+    $this->assertContains($this->deadline(1, 'weeks'), $deadline['examples']);
 
     $tags = $extras[NodeTypeReviewSettings::TAGS];
     $this->assertSame('Audience tags', $tags['title']);
@@ -206,8 +215,9 @@ class NodeTypeToolComparisonTest extends DataSurfaceKernelTestBase {
    * Tests that the surface driven tool stores the extension.
    *
    * One week, said as an amount and a unit, is stored as the seconds the
-   * classic form stores, and reads back as one week: the conversion is
-   * the extras module's storage shape, applied by the target.
+   * classic form stores, and the target reads back the seconds: the
+   * conversion is the extras module's shape, applied by the pipeline in
+   * prepare, so the target only ever sees the canonical.
    */
   public function testSurfaceToolStoresTheExtension(): void {
     $one_week = $this->extras($this->deadline(1, 'weeks'), ['news', 'sports']);
@@ -224,33 +234,30 @@ class NodeTypeToolComparisonTest extends DataSurfaceKernelTestBase {
     $this->assertSchemaHolds('deadline');
     $this->assertContains(self::EXTRAS, NodeType::load('deadline')?->getDependencies()['module'] ?? []);
 
-    // Read back through the same target, the seconds are a week again.
+    // Read back through the same target: the canonical, which a form
+    // displaying the shape says as one week again.
     $provider = $this->container->get('data_surface_demo_node_type.provider');
     $loaded = $provider->getDataSurfaceTarget('edit', 'deadline')->load($provider->getDataSurface('edit', 'deadline'));
-    $this->assertSame(
-      $this->deadline(1, 'weeks'),
-      $loaded['third_party_settings'][self::EXTRAS][NodeTypeReviewSettings::DEADLINE],
-    );
+    $this->assertSame(604800, $loaded['third_party_settings'][self::EXTRAS][NodeTypeReviewSettings::DEADLINE]);
   }
 
   /**
    * Tests that a deadline past thirty days is refused, on the amount.
    *
    * The pipeline refuses it on what the caller sent, in the caller's
-   * units, at the amount's path; nothing is created. The config schema's
-   * Range on the stored seconds is the second gate, and it holds too:
-   * the pipeline's check runs first, and every value the surface stores
-   * satisfies it.
+   * units, at the amount's path; nothing is created. The canonical's
+   * Range on the seconds is the second gate, and the config schema's the
+   * third: the shape's check runs first, and every value the surface
+   * stores satisfies both of the others.
    */
   public function testSurfaceToolRefusesAnOutOfRangeDeadline(): void {
     $path = 'third_party_settings.' . self::EXTRAS . '.' . NodeTypeReviewSettings::DEADLINE . '.' . NodeTypeReviewSettings::AMOUNT;
     $result = $this->runSurfaceTool($this->contentType('late') + $this->extras($this->deadline(45, 'days'), []));
     $this->assertFalse($result->isSuccess());
     $message = (string) $result->getMessage();
-    // The Tool API runs the converted constraints itself before the tool
-    // does, and refuses in its own path spelling, naming the deadline.
-    $this->assertStringContainsString('(property ' . NodeTypeReviewSettings::DEADLINE . ')', $message);
-    $this->assertStringContainsString('at most thirty days; 45 days is outside that', $message);
+    // The key is a union the Tool API cannot check, so the tool runs and
+    // the pipeline refuses, in its own path spelling.
+    $this->assertStringContainsString($path . ': A review deadline is at least one hour and at most thirty days; 45 days is outside that.', $message);
     $this->assertNull(NodeType::load('late'));
 
     // The same through the pipeline alone, and in weeks.
@@ -266,10 +273,12 @@ class NodeTypeToolComparisonTest extends DataSurfaceKernelTestBase {
     );
     $this->assertNull(NodeType::load('late'));
 
-    // A bare number where the amount and unit go says nothing about its
-    // unit, and is refused rather than guessed at.
+    // A bare number is the canonical, which the surface says is
+    // seconds: seven of them are refused by its Range, and the refusal
+    // names the shapes that were tried too.
     $result = $this->runSurfaceTool($this->contentType('bare') + $this->extras(7, []));
     $this->assertFalse($result->isSuccess());
+    $this->assertStringContainsString('none of its shapes (amount_unit (from ' . self::EXTRAS . '), iso8601 (from data_surface_demo_duration)) took it either', (string) $result->getMessage());
     $this->assertNull(NodeType::load('bare'));
   }
 
@@ -318,8 +327,9 @@ class NodeTypeToolComparisonTest extends DataSurfaceKernelTestBase {
    * inside the Range, accepted by the classic tool and satisfied by the
    * schema, and not what the form stores for a person who chose ten
    * business days. The range applies to the converted seconds exactly as
-   * for any other unit, and the stored seconds read back as days, not
-   * business days, because they carry no unit.
+   * for any other unit, and the stored seconds are just seconds: a form
+   * displaying the amount and unit shows them as days, not business
+   * days, because they carry no unit.
    */
   public function testBusinessDaysNeedTheContract(): void {
     $business_days = NodeTypeReviewSettings::BUSINESS_DAYS;
@@ -340,11 +350,13 @@ class NodeTypeToolComparisonTest extends DataSurfaceKernelTestBase {
     $this->assertSame($rule, $this->stored('business')[NodeTypeReviewSettings::DEADLINE] ?? NULL);
     $this->assertSchemaHolds('business');
     $provider = $this->container->get('data_surface_demo_node_type.provider');
-    $loaded = $provider->getDataSurfaceTarget('edit', 'business')->load($provider->getDataSurface('edit', 'business'));
-    $this->assertSame(
-      $this->deadline(12, 'days'),
-      $loaded['third_party_settings'][self::EXTRAS][NodeTypeReviewSettings::DEADLINE],
-    );
+    $edit = $provider->getDataSurface('edit', 'business');
+    $loaded = $provider->getDataSurfaceTarget('edit', 'business')->load($edit);
+    $this->assertSame($rule, $loaded['third_party_settings'][self::EXTRAS][NodeTypeReviewSettings::DEADLINE]);
+    $form = $this->container->get('data_surface.form_builder')->buildSurfaceForm($edit, $loaded, new FormState(), 'business', NodeTypeSurfaceFormCosmetics::SHAPES);
+    $shown = $form['third_party_settings'][self::EXTRAS][NodeTypeReviewSettings::DEADLINE];
+    $this->assertSame(12, $shown[NodeTypeReviewSettings::AMOUNT]['#default_value']);
+    $this->assertSame('days', $shown[NodeTypeReviewSettings::UNIT]['#default_value']);
 
     // Core's form, for a person choosing ten business days: the same
     // seconds, and an edit shows them as twelve days.
@@ -382,7 +394,7 @@ class NodeTypeToolComparisonTest extends DataSurfaceKernelTestBase {
     $this->assertSame(NodeTypeReviewSettings::DEADLINE_MAX, $this->stored('business_max')[NodeTypeReviewSettings::DEADLINE] ?? NULL);
     $result = $this->runSurfaceTool($this->contentType('business_late') + $this->extras($this->deadline(23, $business_days), NULL));
     $this->assertFalse($result->isSuccess());
-    $this->assertStringContainsString('(property ' . NodeTypeReviewSettings::DEADLINE . ')', (string) $result->getMessage());
+    $this->assertStringContainsString(NodeTypeReviewSettings::DEADLINE . '.' . NodeTypeReviewSettings::AMOUNT . ': A review deadline', (string) $result->getMessage());
     $this->assertStringContainsString('23 business_days is outside that', (string) $result->getMessage());
     $this->assertNull(NodeType::load('business_late'));
     $form_state = $this->submitClassicForm('business_person_max', '22', $business_days, '');
@@ -400,8 +412,9 @@ class NodeTypeToolComparisonTest extends DataSurfaceKernelTestBase {
     $this->assertTrue($result->isSuccess(), (string) $result->getMessage());
     $context = $result->getContextValues();
     $this->assertFalse($context[SurfaceProviderToolBase::COMMITTED]);
+    // What would have been stored: the canonical.
     $this->assertSame(
-      $this->deadline(1, 'weeks'),
+      604800,
       $context[SurfaceProviderToolBase::VALUES]['third_party_settings'][self::EXTRAS][NodeTypeReviewSettings::DEADLINE],
     );
     $this->assertNull(NodeType::load('rehearsal'));
@@ -468,6 +481,27 @@ class NodeTypeToolComparisonTest extends DataSurfaceKernelTestBase {
       $this->stored('classic_week'),
     );
     $this->assertSame([], $this->constraintViolations('classic_week'));
+
+    // One week as the ISO 8601 duration the surface takes as a shape: the
+    // classic path converts nothing, the config system casts the string
+    // to the schema's integer on save, and 0 is stored, which the Range
+    // refuses once something asks. The surface stores 604800.
+    $result = $this->runClassicTool('classic_iso', $this->extras('P1W', NULL));
+    $this->assertTrue($result->isSuccess(), (string) $result->getMessage());
+    $this->assertSame([NodeTypeReviewSettings::DEADLINE => 0], $this->stored('classic_iso'));
+    $this->assertSame(
+      ['third_party_settings.' . self::EXTRAS . '.' . NodeTypeReviewSettings::DEADLINE],
+      array_keys($this->constraintViolations('classic_iso')),
+    );
+    $this->assertTrue($this->runSurfaceTool($this->contentType('surface_iso') + $this->extras('P1W', NULL))->isSuccess());
+    $this->assertSame(604800, $this->stored('surface_iso')[NodeTypeReviewSettings::DEADLINE] ?? NULL);
+
+    // Naming the shape is a map the stored schema has no key for, and
+    // the config system refuses it outright.
+    $result = $this->runClassicTool('classic_selector', $this->extras(SurfaceShape::select('iso8601', 'P1W'), NULL));
+    $this->assertFalse($result->isSuccess());
+    $this->assertStringContainsString(NodeTypeReviewSettings::DEADLINE . ".@shape doesn't exist", static::plain((string) $result->getMessage()));
+    $this->assertNull(NodeType::load('classic_selector'));
   }
 
   /**
@@ -510,9 +544,10 @@ class NodeTypeToolComparisonTest extends DataSurfaceKernelTestBase {
    * Tests the surface driven form, which the extension also reaches.
    *
    * The generic provider form renders the deadline as an amount and a
-   * unit select, and the tags as one comma-separated field, because the
-   * extras module brings the widget for the list it mounts; without it,
-   * building the form would be refused. Reading the field back only
+   * unit select, because its cosmetic layer's display chooses that shape
+   * over the seconds, and the tags as one comma-separated field, because
+   * the extras module brings the widget for the list it mounts; without
+   * it, building the form would be refused. Reading the field back only
    * splits it, so tags the surface does not take are refused on the
    * form exactly as they are refused from the tool.
    */
@@ -580,6 +615,21 @@ class NodeTypeToolComparisonTest extends DataSurfaceKernelTestBase {
       'One week. Surface: `{"amount": 1, "unit": "weeks"}`; classic: `604800`, by a schema-only agent that reads 3600 and 2592000 as an hour and thirty days in seconds and infers the unit, rightly, though nothing tells it so before storage; form: 1, Weeks' => [
         $this->extras($this->deadline(1, 'weeks'), NULL),
         $this->extras(604800, NULL),
+        ['1', 'weeks', ''],
+      ],
+      'One week as seconds, the canonical, whose unit the surface now says: `604800` to both tools; form: 1, Weeks' => [
+        $this->extras(604800, NULL),
+        $this->extras(604800, NULL),
+        ['1', 'weeks', ''],
+      ],
+      'One week as P1W: `"P1W"` to both tools, which on the surface is a shape contributed by `data_surface_demo_duration`, a module that owns nothing here; form: 1, Weeks, since core\'s form has no such reading' => [
+        $this->extras('P1W', NULL),
+        $this->extras('P1W', NULL),
+        ['1', 'weeks', ''],
+      ],
+      'One week as P1W, naming the shape: `{"@shape": "iso8601", "@value": "P1W"}` to both tools; form: 1, Weeks' => [
+        $this->extras(SurfaceShape::select('iso8601', 'P1W'), NULL),
+        $this->extras(SurfaceShape::select('iso8601', 'P1W'), NULL),
         ['1', 'weeks', ''],
       ],
       'Forty-five days, past the ceiling. Surface: `{"amount": 45, "unit": "days"}`; classic: `3888000`; form: 45, Days' => [

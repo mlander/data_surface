@@ -4,61 +4,87 @@ declare(strict_types=1);
 
 namespace Drupal\data_surface_demo_extras;
 
-use Drupal\data_surface\Target\SettingsShapeInterface;
+use Drupal\Core\TypedData\DataDefinitionInterface;
+use Drupal\data_surface\DataSurfaceShapeInterface;
 
 /**
- * Writes the review deadline down as seconds, and reads it back.
+ * The review deadline as a person says it: an amount and a unit.
  *
- * The surface asks for the deadline the way a person says it, an amount
- * and a unit; the node type stores one integer of seconds, the same
- * integer core's content type form stores through this module's form
- * alter. This is the whole of the distance between the two, handed to
- * the surface at build time so that whichever target writes this
- * module's third party settings applies it, and nothing but this
- * module's namespace passes through it.
+ * The key's canonical is what is stored, one integer of seconds, the
+ * same integer core's content type form stores through this module's
+ * form alter. This shape is the other way to say it, contributed beside
+ * the canonical rather than in place of it: a caller may send seconds,
+ * or an amount and a unit, and the pipeline converts the pair in
+ * prepare, after the pair's own constraint and before the seconds'
+ * Range, so both gates hold.
  *
  * The conversion is NodeTypeReviewSettings::seconds(), business days
- * included, the same the form alter uses. fromStorage() reads seconds
+ * included, the same the form alter uses. fromCanonical() reads seconds
  * back in the largest fixed unit that divides them exactly, so seven
  * days comes back as one week — the same duration, said once. The
- * duration always round-trips; the unit does not always: stored seconds
- * carry no unit, so ten business days come back as twelve days, as
- * NodeTypeReviewSettings::BUSINESS_DAYS explains. A stored value that is
- * not whole hours, which neither this surface nor the form alter writes,
- * reads back as no amount.
+ * duration always round-trips; the unit does not always, which is why
+ * the shape is lossy: stored seconds carry no unit, so ten business days
+ * come back as twelve days, as NodeTypeReviewSettings::BUSINESS_DAYS
+ * explains. A stored value that is not whole hours, which neither this
+ * surface nor the form alter writes, reads back as no amount.
+ *
+ * The input definition is handed in, built where translation is
+ * injected, so the shape itself stays a plain serializable value.
  */
-final class ReviewDeadlineShape implements SettingsShapeInterface {
+final class ReviewDeadlineShape implements DataSurfaceShapeInterface {
 
   /**
-   * {@inheritdoc}
+   * The id this shape is contributed under.
    */
-  public function toStorage(array $values): array {
-    if (!array_key_exists(NodeTypeReviewSettings::DEADLINE, $values)) {
-      return $values;
-    }
-    $deadline = $values[NodeTypeReviewSettings::DEADLINE];
-    $amount = is_array($deadline) ? ($deadline[NodeTypeReviewSettings::AMOUNT] ?? NULL) : NULL;
-    $unit = is_array($deadline) ? ($deadline[NodeTypeReviewSettings::UNIT] ?? NULL) : NULL;
-    $values[NodeTypeReviewSettings::DEADLINE] = is_int($amount)
-      ? NodeTypeReviewSettings::seconds($amount, is_string($unit) ? $unit : NodeTypeReviewSettings::DEFAULT_UNIT)
-      : NULL;
-    return $values;
+  public const ID = 'amount_unit';
+
+  /**
+   * Constructs a ReviewDeadlineShape.
+   *
+   * @param \Drupal\Core\TypedData\DataDefinitionInterface $definition
+   *   The amount and unit map, with the constraint on the pair.
+   */
+  public function __construct(
+    protected readonly DataDefinitionInterface $definition,
+  ) {
   }
 
   /**
    * {@inheritdoc}
    */
-  public function fromStorage(array $settings): array {
-    if (!array_key_exists(NodeTypeReviewSettings::DEADLINE, $settings)) {
-      return $settings;
+  public function getInputDefinition(): DataDefinitionInterface {
+    return $this->definition;
+  }
+
+  /**
+   * {@inheritdoc}
+   */
+  public function toCanonical(mixed $input): mixed {
+    $amount = is_array($input) ? ($input[NodeTypeReviewSettings::AMOUNT] ?? NULL) : NULL;
+    $unit = is_array($input) ? ($input[NodeTypeReviewSettings::UNIT] ?? NULL) : NULL;
+    if (!is_int($amount)) {
+      // No amount is no deadline.
+      return NULL;
     }
-    $seconds = $settings[NodeTypeReviewSettings::DEADLINE];
-    $split = is_int($seconds) ? NodeTypeReviewSettings::split($seconds) : NULL;
-    $settings[NodeTypeReviewSettings::DEADLINE] = $split ?? [
+    return NodeTypeReviewSettings::seconds($amount, is_string($unit) ? $unit : NodeTypeReviewSettings::DEFAULT_UNIT);
+  }
+
+  /**
+   * {@inheritdoc}
+   */
+  public function fromCanonical(mixed $stored): mixed {
+    $split = is_int($stored) ? NodeTypeReviewSettings::split($stored) : NULL;
+    return $split ?? [
       NodeTypeReviewSettings::AMOUNT => NULL,
       NodeTypeReviewSettings::UNIT => NodeTypeReviewSettings::DEFAULT_UNIT,
     ];
-    return $settings;
+  }
+
+  /**
+   * {@inheritdoc}
+   */
+  public function isLossy(): bool {
+    return TRUE;
   }
 
 }

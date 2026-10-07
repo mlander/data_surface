@@ -11,6 +11,7 @@ use Drupal\Core\TypedData\ComplexDataDefinitionInterface;
 use Drupal\Core\TypedData\DataDefinitionInterface;
 use Drupal\Core\TypedData\ListDataDefinitionInterface;
 use Drupal\Core\TypedData\MapDataDefinition;
+use Drupal\data_surface\Pipeline\DataSurfacePipelineInterface;
 use Drupal\data_surface\Refinement\ChoiceSet;
 use Drupal\data_surface\Target\SettingsShapeInterface;
 
@@ -68,6 +69,16 @@ final class DataSurfaceBuilder implements DataSurfaceBuilderInterface {
    * @var array<string, \Drupal\data_surface\Target\SettingsShapeInterface>
    */
   protected array $thirdPartyShapes = [];
+
+  /**
+   * Shapes contributed to a key, by dotted key, then by shape id.
+   *
+   * Recorded as contributed and attached to the canonical definitions at
+   * seal, when every key they may name has been declared.
+   *
+   * @var array<string, array<string, \Drupal\data_surface\SurfaceShape>>
+   */
+  protected array $shapes = [];
 
   /**
    * Output refiner chains keyed by output key, then by contributor.
@@ -262,6 +273,32 @@ final class DataSurfaceBuilder implements DataSurfaceBuilderInterface {
   public function setThirdPartyShape(string $provider, SettingsShapeInterface $shape): static {
     $this->assertMutable();
     $this->thirdPartyShapes[$provider] = $shape;
+    return $this;
+  }
+
+  /**
+   * {@inheritdoc}
+   */
+  public function addShape(string $key, string $id, DataSurfaceShapeInterface $shape, ?string $contributor = NULL): static {
+    $this->assertMutable();
+    if ($id === '' || str_starts_with($id, '@')) {
+      throw new \InvalidArgumentException(sprintf(
+        'A shape of "%s" needs an id that does not start with "@": "%s" is not one. The "@" prefix is the pipeline\'s own, and the id is what a payload and a form display name the shape by.',
+        $key,
+        $id,
+      ));
+    }
+    $contributor ??= DataSurfaceInterface::OWNER;
+    if (isset($this->shapes[$key][$id])) {
+      throw new \LogicException(sprintf(
+        'The "%s" key already has a shape named "%s", contributed by %s, so %s cannot contribute another under that name.',
+        $key,
+        $id,
+        static::who($this->shapes[$key][$id]->contributor),
+        static::who($contributor),
+      ));
+    }
+    $this->shapes[$key][$id] = new SurfaceShape($id, $shape, $contributor);
     return $this;
   }
 
@@ -466,6 +503,7 @@ final class DataSurfaceBuilder implements DataSurfaceBuilderInterface {
     if ($this->thirdParty !== []) {
       $definitions['third_party_settings'] = $this->mountedMap($this->thirdParty, FALSE);
     }
+    $this->attachShapes($definitions, array_keys($mounts + $slots));
     $outputs = $this->outputs;
     // Asked again over everything, because outputs also arrive whole
     // through the constructor, and a declaration that cannot be honored
@@ -538,6 +576,110 @@ final class DataSurfaceBuilder implements DataSurfaceBuilderInterface {
       $providers->setPropertyDefinition((string) $provider, SurfaceMount::fill($provider_map, $keys));
     }
     return $providers;
+  }
+
+  /**
+   * Writes every contributed shape onto the key it names, checked.
+   *
+   * Asked at seal because a shape may be contributed before its key is
+   * declared, and because ambiguity is a property of the whole set: two
+   * contributors who never heard of each other can each add a shape that
+   * is fine alone and indistinguishable together.
+   *
+   * @param array<string, \Drupal\Core\TypedData\DataDefinitionInterface> $definitions
+   *   The assembled definitions, third party map included.
+   * @param array<int|string> $nested
+   *   The keys that are mounts or slots.
+   *
+   * @throws \LogicException
+   *   When a shape names a key it may not shape, or two readings of one
+   *   key cannot be told apart.
+   */
+  protected function attachShapes(array $definitions, array $nested): void {
+    foreach ($this->shapes as $key => $shapes) {
+      $key = (string) $key;
+      $canonical = $this->shapedDefinition($definitions, $key, array_map('strval', $nested));
+      $readings = [SurfaceShape::CANONICAL => $canonical];
+      foreach ($shapes as $id => $shape) {
+        $input = $shape->shape->getInputDefinition();
+        if ($input->getDataType() === 'any') {
+          throw new \LogicException(sprintf('The %s shape of "%s" accepts anything, so no input could ever be told apart from it.', $shape->describe(), $key));
+        }
+        $readings[(string) $id] = $input;
+      }
+      $names = array_keys($readings);
+      foreach ($names as $i => $a) {
+        foreach (array_slice($names, $i + 1) as $b) {
+          if (SurfaceShape::overlaps($readings[$a], $readings[$b])) {
+            throw new \LogicException(sprintf(
+              'The %s and the %s readings of "%s" could both read the same input, so which one a caller meant would be a guess. Give one of them a different structure; a caller can still name a shape with "%s", but the matching rule refuses to guess.',
+              $a === SurfaceShape::CANONICAL ? 'canonical' : $shapes[$a]->describe(),
+              $shapes[$b]->describe(),
+              $key,
+              DataSurfacePipelineInterface::SHAPE,
+            ));
+          }
+        }
+      }
+      DefinitionMetadata::setShapes($canonical, $shapes);
+    }
+  }
+
+  /**
+   * Finds the definition a shape names, refusing one it may not shape.
+   *
+   * @param array<string, \Drupal\Core\TypedData\DataDefinitionInterface> $definitions
+   *   The assembled definitions.
+   * @param string $key
+   *   The dotted key.
+   * @param string[] $nested
+   *   The keys that are mounts or slots.
+   *
+   * @return \Drupal\Core\TypedData\DataDefinitionInterface
+   *   The canonical definition.
+   *
+   * @throws \LogicException
+   *   When the key cannot take shapes.
+   */
+  protected function shapedDefinition(array $definitions, string $key, array $nested): DataDefinitionInterface {
+    $segments = explode('.', $key);
+    $top = (string) array_shift($segments);
+    if (in_array($top, $nested, TRUE)) {
+      throw new \LogicException(sprintf('A shape was contributed to "%s", inside the mount at "%s". A mounted child\'s keys are the child\'s: contribute the shape when the child surface is built.', $key, $top));
+    }
+    $definition = $definitions[$top] ?? NULL;
+    foreach ($segments as $segment) {
+      $definition = $definition instanceof ComplexDataDefinitionInterface
+        ? $definition->getPropertyDefinition($segment)
+        : NULL;
+    }
+    if ($definition === NULL) {
+      throw new \LogicException(sprintf('A shape was contributed to "%s", which this surface does not declare.', $key));
+    }
+    $refusal = match (TRUE) {
+      $definition->getDataType() === 'any' => 'is typed any, which no input can be told apart from',
+      $definition instanceof ListDataDefinitionInterface => 'is a list, and shapes of a list are not supported',
+      DefinitionMetadata::isSecret($definition) => 'is secret, and a secret keeps what it holds when it is sent nothing, which a shape could not say',
+      $segments === [] && in_array($top, array_merge([], ...array_values($this->refinements)), TRUE) => 'is a key another key refines against, and a refiner reads its value as it was sent',
+      default => NULL,
+    };
+    if ($refusal !== NULL) {
+      throw new \LogicException(sprintf('"%s" cannot take shapes: it %s.', $key, $refusal));
+    }
+    return $definition;
+  }
+
+  /**
+   * Names a contributor for a message.
+   *
+   * @param string $contributor
+   *   A module name, or DataSurfaceInterface::OWNER.
+   *
+   * @return string
+   *   The name, in words.
+   */
+  protected static function who(string $contributor): string {
+    return $contributor === DataSurfaceInterface::OWNER ? 'the surface owner' : $contributor;
   }
 
   /**

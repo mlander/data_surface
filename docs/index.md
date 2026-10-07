@@ -42,6 +42,7 @@ it](https://www.drupal.org/project/drupal/issues/3622144).
 | **Widget** | Maps one definition to a form element and back. A plugin type. | `Widget\DataSurfaceWidgetInterface`, `Plugin/DataSurfaceWidget/*` |
 | **Options resolver** | Reads one validation constraint as the list of values it allows, with labels and cacheability. A plugin type. | `Options\DataSurfaceOptionsResolverInterface`, `Plugin/DataSurfaceOptionsResolver/*` |
 | **Refiner** | Returns a narrower definition for one key, given what its dependencies hold. | `DataSurfaceRefinerInterface`, and `DataSurfaceFilterInterface` for policy filters |
+| **Shape** | Another way to say a key's value: its own input definition and the conversion to and from the key's canonical definition, contributed by any module. The canonical is untouched and always accepted. | `DataSurfaceShapeInterface`, `DataSurfaceBuilderInterface::addShape()`, `SurfaceShape` |
 | **Mount and slot** | A whole child surface at a key, known from its address; or one of a declared set of child surfaces, chosen by a sibling key. Shape is declared statically, never by refinement. | `DataSurfaceBuilderInterface::mount()` and `mountVariants()`, `SurfaceMount`, `SurfaceSlot`, `DataSurfaceCoordinate` |
 | **Host** | The thing whose values a surface describes: a block, a formatter, a condition, an action, a field type, a standalone form. | `Form\*` traits and the `Plugin/*Base` classes |
 | **Provider** | A class that answers with a surface, and with the target it writes to, for a given operation. | `DataSurfaceProviderInterface`, `Form\FieldSurfaceProviderInterface` |
@@ -88,6 +89,9 @@ means constructing an object graph by hand.
 - **A value whose shape depends on something**: [Nesting](nesting.md),
   for mounts and slots and the rule that shape is declared, not
   refined.
+- **Another way to say a value somebody else's key stores**:
+  [Shapes](shapes.md), for contributed inputs beside a canonical, the
+  matching rule, and how a form display chooses one.
 - **Understanding what a value will become**: [The
   pipeline](pipeline.md) for the stages, [Value
   semantics](semantics.md) for the rules each stage applies.
@@ -103,6 +107,6 @@ means constructing an object graph by hand.
 
 The module ships no surfaces of its own on a production site. It provides
 the surface model, the pipeline, the two plugin types and the host
-adoption layer; surfaces come from the modules that declare them. Five
+adoption layer; surfaces come from the modules that declare them. Eight
 experimental submodules demonstrate the model and double as the fixtures
 the tests run against — see [Installation](installation.md).

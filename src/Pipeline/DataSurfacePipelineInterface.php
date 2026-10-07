@@ -89,6 +89,34 @@ interface DataSurfacePipelineInterface {
   public const KEEP_STALE = '@data_surface:keep-stale';
 
   /**
+   * The key a payload names the shape of a value with.
+   *
+   * A key that takes contributed shapes reads a value by the matching
+   * rule — the canonical first, then each shape in order — unless the
+   * payload says which it means. It says so by sending, in the value's
+   * place, a map of this key, holding the shape's id, and SHAPE_VALUE,
+   * holding the value in that shape:
+   *
+   * @code
+   * ['review_deadline' => ['@shape' => 'iso8601', '@value' => 'P1W']]
+   * @endcode
+   *
+   * Spelled in the same reserved "@" namespace as ACCESS_VIOLATION_KEY,
+   * and as a key for the same reason: no definition names a key with a
+   * leading "@", so a map carrying one is never a value of any shape.
+   * A generated form sends it for every key it displays in a shape, so
+   * a form never relies on the matching rule.
+   *
+   * @see docs/shapes.md
+   */
+  public const SHAPE = '@shape';
+
+  /**
+   * The key beside SHAPE holding the value in the named shape.
+   */
+  public const SHAPE_VALUE = '@value';
+
+  /**
    * Produces a complete, typed value set from partial, untyped input.
    *
    * Values merge in one order at every level: the surface's declared
@@ -104,6 +132,13 @@ interface DataSurfacePipelineInterface {
    * are refused rather than dropped, at any depth, and so is input in a
    * shape the definition cannot hold. The casting table and the
    * configured/not configured rule are stated in docs/semantics.md.
+   *
+   * A key that takes contributed shapes is read by the matching rule —
+   * the canonical, then each shape in order, the first the value fits
+   * and satisfies — or in the shape the input names with SHAPE. A value
+   * read in a shape is returned as that selector, not converted:
+   * validate() runs the shape's gates on it and prepare() converts it.
+   * See docs/shapes.md.
    *
    * @param \Drupal\data_surface\DataSurfaceInterface $surface
    *   The surface describing what the values may be.
@@ -221,7 +256,37 @@ interface DataSurfacePipelineInterface {
   public function conformOutput(DataSurfaceInterface $surface, array $output, array $input_values = []): ViolationSet;
 
   /**
+   * Turns every value sent in a contributed shape into its canonical.
+   *
+   * What prepare() does before it hands values to a target, so a target
+   * only ever sees canonical values, and the same thing for a host that
+   * stores accepted values itself — a plugin's setConfiguration(), a
+   * formatter's settings — rather than through a target. A value sent
+   * as the canonical passes through untouched, so the call is safe to
+   * repeat.
+   *
+   * @param \Drupal\data_surface\DataSurfaceInterface $surface
+   *   The surface the values belong to.
+   * @param array $values
+   *   The accepted, validated values.
+   *
+   * @return array
+   *   The same values, every shaped one converted.
+   *
+   * @throws \InvalidArgumentException
+   *   When a value names a shape its key does not take, which validate()
+   *   refuses first.
+   *
+   * @see docs/shapes.md
+   */
+  public function canonical(DataSurfaceInterface $surface, array $values): array;
+
+  /**
    * Shapes accepted values for a storage target without writing.
+   *
+   * Values sent in a contributed shape are converted to their canonical
+   * first, with canonical(), so the target is handed canonical values
+   * only.
    *
    * @param \Drupal\data_surface\DataSurfaceInterface $surface
    *   The surface the values belong to.
@@ -281,7 +346,9 @@ interface DataSurfacePipelineInterface {
    *   existed means, and what a host that gates elsewhere means.
    *
    * @return \Drupal\data_surface\Pipeline\DataSurfaceResult
-   *   The accepted values, any violations, the prepared artifact when
+   *   The values — accepted, or canonical once they were prepared, so a
+   *   caller reading a successful result reads what was stored — any
+   *   violations, the prepared artifact when
    *   the values were valid, whether the write happened, and the access
    *   answer it was given, so a caller can merge its cacheability.
    */

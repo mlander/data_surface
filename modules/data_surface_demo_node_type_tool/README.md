@@ -22,10 +22,14 @@ ordinary `hook_form_node_type_form_alter`. Nothing in this module, and
 nothing in the tool's base class, names either setting, or any other key
 of a content type; `NodeTypeToolComparisonTest` greps the two files to
 keep that true. Enable the extras module and the tool advertises both
-settings — the deadline as an amount and a unit, the tags with their
-pattern — and holds every caller to them, storing one week as the
-604800 seconds core's form would store, and ten business days as the
-1036800 seconds core's form stores for them too.
+settings — the deadline as the seconds that are stored, with their unit
+said, or as an amount and a unit; the tags with their pattern — and
+holds every caller to them, storing one week as the 604800 seconds
+core's form would store, and ten business days as the 1036800 seconds
+core's form stores for them too. Enable `data_surface_demo_duration` as
+well and the deadline also takes an ISO 8601 duration, `"P1W"`, which
+that module contributes to a key it does not own; the tool takes it with
+no change.
 
 [`COMPARISON.md`](COMPARISON.md) has both tools' advertised schemas and
 a table of what each tool, and core's form, did with the same cases. It
@@ -135,35 +139,45 @@ thing, so it was written to be:
 
 ## How the surface side converts, and where
 
-The surface asks for the deadline the way a person says it, an amount
-and a unit, and stores the seconds core's form stores. The conversion is
-`ReviewDeadlineShape`, a `SettingsShapeInterface` the extras module hands
-the surface at build time with
-`DataSurfaceBuilderInterface::setThirdPartyShape()`. The sealed surface
-carries it, and `ConfigEntityTarget` — the target that writes third
-party settings — applies it to that provider's namespace only:
-`toStorage()` in prepare, before its config schema check, and
-`fromStorage()` on load, so an edit reads 604800 back as one week.
+On the surface the deadline's canonical is what is stored: an integer of
+seconds with the schema's Range, described as seconds. The way a person
+says it, an amount and a unit, is a [shape](../../docs/shapes.md) the
+extras module contributes beside it with
+`DataSurfaceBuilderInterface::addShape()`, converted by
+`ReviewDeadlineShape`; `data_surface_demo_duration` contributes an ISO
+8601 duration the same way. A caller sends any of them, or names one
+with `{"@shape": "iso8601", "@value": "P1W"}`, and the pipeline converts
+the shape to seconds in prepare, so `ConfigEntityTarget` and the rest of
+the composite target only ever see seconds, and read seconds back.
 Business days convert by the same `NodeTypeReviewSettings::seconds()`
 the form uses, and do not round-trip to their own unit: stored seconds
-carry no unit, so `fromStorage()` reads them back in the largest of
-hours, days or weeks that divides them exactly. Under the business day
-rule that is always days, since a count of business days never ends on
-a weekend: ten business days read back as twelve days. The duration is
-kept; the way it was said is not.
-Neither the node type provider nor its composite target knows the extras
-module exists; the translation travels with the contribution, the same
-way `FieldSettingsTarget` finds a surface's secret keys on the surface it
-is handed.
+carry no unit, so the shape says them in the largest of hours, days or
+weeks that divides them exactly. Under the business day rule that is
+always days, since a count of business days never ends on a weekend: ten
+business days read back as twelve days. The duration is kept; the way
+it was said is not, which is why the shape is lossy and the generated
+form says so. The generated form asks a person for the amount and unit
+because its cosmetic layer's display chooses that shape.
+Neither the node type provider nor its composite target knows either
+contributing module exists; the shapes travel on the key's definition.
 
-Both gates hold. The pipeline refuses forty-five days on the amount the
-caller sent, in the caller's units
+Both gates hold, and a third. The pipeline refuses forty-five days on
+the amount the caller sent, in the caller's units
 (`third_party_settings.data_surface_demo_extras.review_deadline.amount`),
-through a constraint on the amount and unit together; and the target's
-config schema check, run on the seconds about to be stored, enforces the
-schema's own Range as a second gate. Both judge business days on their
-converted seconds, like any other unit: twenty-two are thirty calendar
-days and accepted, twenty-three are thirty-one and refused.
+through the shape's constraint on the amount and unit together; the
+canonical's Range judges the seconds a shape becomes, which is how
+`"P45D"` is refused; and the target's config schema check, run on the
+seconds about to be stored, enforces the schema's own Range once more.
+All of them judge business days on their converted seconds, like any
+other unit: twenty-two are thirty calendar days and accepted,
+twenty-three are thirty-one and refused.
+
+The advertised schema cannot say the deadline exactly. A key with
+shapes is a union decided by the value, which is a `oneOf` in JSON
+Schema, and the Tool API has no way to emit one; so the key is an
+untyped value whose description names each reading and whose `examples`
+show one of each, and the refusals for it arrive in the pipeline's path
+spelling rather than the Tool API's. `docs/shapes.md` has the detail.
 
 ## The one deliberate difference
 
@@ -181,8 +195,8 @@ the same message a tool caller gets.
 
 | Test | Covers |
 | --- | --- |
-| `Kernel\NodeTypeToolComparisonTest` | The advertised schema, the stored schema, the tool naming no key, storage and read-back through the storage shape, refusals with paths, dry runs, what Tool Belt advertises and stores, the classic form for a person, the surface form with the extension, and `COMPARISON.md`. |
-| `Kernel\DataSurfaceBuilderTest` | A third-party storage shape travels with the surface, through refinement, and is refused for a provider that mounts nothing. |
+| `Kernel\NodeTypeToolComparisonTest` | The advertised schema, the stored schema, the tool naming no key, storage and read-back of the canonical, refusals with paths, dry runs, what Tool Belt advertises and stores, the classic form for a person, the surface form with the extension, and `COMPARISON.md`. |
+| `Kernel\SurfaceShapesTest` | One week said every way storing 604800 through the pipeline, this tool and the generated form; the `@shape` selector; both gates; a filter removing a shape; the display choice; the lossy inverse; the union this tool advertises. |
 
 ## Tool API limitations found
 
@@ -212,3 +226,9 @@ the same message a tool caller gets.
   in the description.
 - **A string sent for a list is wrapped into a list of one item** by
   typed data before validation, rather than refused as the wrong shape.
+- **No per-key union.** A key with contributed shapes takes several
+  kinds of value, which JSON Schema says with `oneOf`; an input
+  definition holds one data type and the normalize event cannot write
+  keywords, so the key is advertised as `any`, described in words, with
+  `examples`, and core's normalizer adds a `$comment` that no schema is
+  defined for the type.

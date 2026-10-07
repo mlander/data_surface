@@ -172,6 +172,7 @@ trait DataSurfaceFormatterTrait {
       $values,
       $form_state,
       'data-surface-' . $field_name,
+      $this->surfaceShapeDisplay(),
     );
     // Identifiers, not objects: the static callback rebuilds the
     // formatter, and with it the surface and its refiner, from these two
@@ -217,10 +218,15 @@ trait DataSurfaceFormatterTrait {
     $builder = \Drupal::service('data_surface.form_builder');
     $stored = is_array($current) ? $current : [];
     $values = $builder->extractSurfaceValues($surface, $element, $form_state, $stored);
-    $builder->validateSurfaceForm($surface, $values, $element, $form_state, $stored);
+    $valid = $builder->validateSurfaceForm($surface, $values, $element, $form_state, $stored);
     // The host copies whatever the elements produced, so the accepted
-    // values have to be what it finds there.
-    $form_state->setValueForElement($element, $values);
+    // values have to be what it finds there — canonical, since the host
+    // stores them as they are and a displayed shape is not what is kept.
+    // A refused submission is never stored, and is left as it was sent.
+    $form_state->setValueForElement($element, $valid
+      // @phpstan-ignore globalDrupalDependencyInjection.useDependencyInjection
+      ? \Drupal::service('data_surface.pipeline')->canonical($surface, $values)
+      : $values);
   }
 
   /**

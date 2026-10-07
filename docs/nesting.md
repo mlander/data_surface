@@ -45,6 +45,11 @@ first two; the other two are recorded as next.
 | **Collection of variants** | A list whose items each pick their own shape. | A list of Views filters, each with its own plugin's settings. | Next: item 12's `*` segment plus a slot per item. |
 | **Contributor with own storage** | Another module mounts settings it stores itself. | Third-party settings on a content type. | Next: today `setThirdPartyDefinition()`; contributor refiners on a mounted key need D6 paths. |
 
+These "shapes" are shapes of what a key *stores*. A contributed
+[shape](shapes.md) is a different thing with the same word: it changes
+only what a key *accepts* — another input converted to the canonical
+value — while a variant changes what is stored.
+
 A fifth case is not "it depends" at all and is listed so it is not
 mistaken for one: a key **locked against stored state** (a machine name
 on edit) narrows its value space to one value. That is `lock()`, and

@@ -66,6 +66,17 @@ final class DefinitionMetadata {
   protected const SLOT_KEY = 'data_surface_slot';
 
   /**
+   * The definition array key holding the shapes contributed to a key.
+   *
+   * Not a core proposal either: core keeps the alternative inputs of a
+   * value in its widgets, where nothing but a form can reach them. Kept
+   * on the definition so the shapes travel wherever it does, nested in a
+   * map or through a refinement, and so a policy filter that hands back
+   * a definition without one has removed it.
+   */
+  protected const SHAPES_KEY = 'data_surface_shapes';
+
+  /**
    * Declares the value a definition starts from.
    *
    * @param \Drupal\Core\TypedData\DataDefinitionInterface $definition
@@ -328,6 +339,68 @@ final class DefinitionMetadata {
     }
     $by = $definition->offsetGet(static::SLOT_KEY);
     return is_string($by) ? $by : NULL;
+  }
+
+  /**
+   * Writes the shapes a key accepts besides its canonical value.
+   *
+   * The builder writes them at seal, once every contributor has added
+   * its own and the set has been checked for ambiguity; nothing else
+   * should, because a shape added after seal would be a widening. A
+   * policy filter takes one away with withoutShape().
+   *
+   * @param \Drupal\Core\TypedData\DataDefinitionInterface $definition
+   *   The canonical definition.
+   * @param array<string, \Drupal\data_surface\SurfaceShape> $shapes
+   *   The shapes, keyed by id, in declaration order; empty to clear.
+   *
+   * @see \Drupal\data_surface\DataSurfaceBuilderInterface::addShape()
+   */
+  public static function setShapes(DataDefinitionInterface $definition, array $shapes): void {
+    static::arrayAccess($definition)->offsetSet(static::SHAPES_KEY, $shapes);
+  }
+
+  /**
+   * Gets the shapes a key accepts besides its canonical value.
+   *
+   * @param \Drupal\Core\TypedData\DataDefinitionInterface $definition
+   *   The definition to read.
+   *
+   * @return array<string, \Drupal\data_surface\SurfaceShape>
+   *   The shapes, keyed by id, in declaration order; empty for a key
+   *   that takes its canonical value only.
+   */
+  public static function getShapes(DataDefinitionInterface $definition): array {
+    if (!$definition instanceof \ArrayAccess || !$definition->offsetExists(static::SHAPES_KEY)) {
+      return [];
+    }
+    $shapes = $definition->offsetGet(static::SHAPES_KEY);
+    return is_array($shapes) ? array_filter($shapes, static fn (mixed $shape): bool => $shape instanceof SurfaceShape) : [];
+  }
+
+  /**
+   * Hands back a definition without one of its shapes.
+   *
+   * The spelling a policy filter uses to say "this site does not take
+   * that shape here": remove-only, so the narrowing check lets it
+   * through. The definition handed in is a filter's own clone and is
+   * changed in place.
+   *
+   * @param \Drupal\Core\TypedData\DataDefinitionInterface $definition
+   *   The definition, as a filter was handed it.
+   * @param string $id
+   *   The shape to remove.
+   *
+   * @return \Drupal\Core\TypedData\DataDefinitionInterface
+   *   The same definition, without that shape.
+   */
+  public static function withoutShape(DataDefinitionInterface $definition, string $id): DataDefinitionInterface {
+    $shapes = static::getShapes($definition);
+    if (isset($shapes[$id])) {
+      unset($shapes[$id]);
+      static::setShapes($definition, $shapes);
+    }
+    return $definition;
   }
 
   /**
