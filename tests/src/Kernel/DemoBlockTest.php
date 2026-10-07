@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Drupal\Tests\data_surface\Kernel;
 
 use Drupal\Core\Form\FormState;
+use Drupal\Core\TypedData\MapDataDefinition;
 use Drupal\data_surface\Pipeline\DataSurfacePipelineInterface;
 use Drupal\data_surface\Target\PluginConfigurationTarget;
 use Drupal\data_surface_demo\Plugin\Block\DataSurfaceDemoBlock;
@@ -86,7 +87,10 @@ class DemoBlockTest extends DataSurfaceKernelTestBase {
       'bundle' => NULL,
       'field' => NULL,
       'limit' => 10,
-      'show_summary' => TRUE,
+      // The slot starts from the variant its discriminator's default
+      // chooses.
+      'presentation' => 'list',
+      'presentation_settings' => ['show_summary' => TRUE],
     ], $this->createBlock()->defaultConfiguration());
   }
 
@@ -244,7 +248,8 @@ class DemoBlockTest extends DataSurfaceKernelTestBase {
       'bundle' => 'article',
       'field' => 'title',
       'limit' => '5',
-      'show_summary' => 0,
+      'presentation' => 'grid',
+      'presentation_settings' => ['columns' => '4'],
     ], new PluginConfigurationTarget($block));
 
     $this->assertTrue($result->isValid());
@@ -254,7 +259,8 @@ class DemoBlockTest extends DataSurfaceKernelTestBase {
     // Submitted strings arrived as the definitions' native types.
     $this->assertSame('Latest articles', $configuration['headline']);
     $this->assertSame(5, $configuration['limit']);
-    $this->assertFalse($configuration['show_summary']);
+    $this->assertSame('grid', $configuration['presentation']);
+    $this->assertSame(['columns' => 4], $configuration['presentation_settings']);
     $this->assertSame('article', $configuration['bundle']);
     $this->assertSame('title', $configuration['field']);
     // Host-owned keys came through the same write untouched.
@@ -296,7 +302,7 @@ class DemoBlockTest extends DataSurfaceKernelTestBase {
     // reaches the page unescaped.
     $items = array_map('strval', $build['#items']);
     $this->assertContains('Number of items: 10', $items);
-    $this->assertContains('Show summaries: yes', $items);
+    $this->assertContains('Presentation: list', $items);
     // A key with no stored value says so in words rather than printing a
     // PHP literal.
     $this->assertContains('Bundle: not configured', $items);
@@ -349,6 +355,65 @@ class DemoBlockTest extends DataSurfaceKernelTestBase {
     $violations = $this->pipeline()->validate($surface, $block->getConfiguration(), $block->getConfiguration());
     $this->assertTrue($violations->isEmpty());
     $this->assertCount(1, $violations->stale());
+  }
+
+  /**
+   * Tests that the presentation settings are a slot, every shape declared.
+   */
+  public function testPresentationSettingsAreSlot(): void {
+    $surface = $this->createBlock()->getDataSurface();
+    $slot = $surface->getDefinitions()->entry('presentation_settings')?->slot;
+
+    $this->assertNotNull($slot);
+    $this->assertSame('presentation', $slot->by);
+    $this->assertSame(['list', 'grid'], $slot->variantIds());
+    $this->assertSame(['show_summary'], $slot->variant('list')->child->getDefinitions()->names());
+    $this->assertSame(['columns'], $slot->variant('grid')->child->getDefinitions()->names());
+    // The discriminator's labeled list is the variant set.
+    $this->assertSame(['list', 'grid'], array_keys($this->container->get('data_surface.options')
+      ->resolve($surface->getDefinition('presentation'))->options));
+
+    // Choosing the grid resolves the slot to exactly the grid's shape.
+    $grid = $surface->refine(['presentation' => 'grid'])->getDefinition('presentation_settings');
+    $this->assertInstanceOf(MapDataDefinition::class, $grid);
+    $this->assertSame(['columns'], array_keys($grid->getPropertyDefinitions()));
+    $this->assertSame(['min' => 1, 'max' => 6], $grid->getPropertyDefinitions()['columns']->getConstraint('Range'));
+  }
+
+  /**
+   * Tests that list settings sent for a grid are refused on the slot.
+   */
+  public function testListSettingsForGridAreRefused(): void {
+    $block = $this->createBlock();
+    $result = $this->pipeline()->submit($block->getDataSurface(), [
+      'presentation' => 'grid',
+      'presentation_settings' => ['show_summary' => TRUE],
+    ], new PluginConfigurationTarget($block));
+
+    $this->assertFalse($result->isValid());
+    $this->assertSame(
+      ['presentation_settings.show_summary'],
+      array_map(static fn ($violation): string => $violation->fullPath(), iterator_to_array($result->violations, FALSE)),
+    );
+    // Nothing was stored.
+    $this->assertSame('list', $block->getConfiguration()['presentation']);
+  }
+
+  /**
+   * Tests that the generated form renders the chosen variant only.
+   */
+  public function testFormRendersTheChosenVariant(): void {
+    $form = $this->createBlock()->buildConfigurationForm([], new FormState());
+    // The discriminator rebuilds the container, like any dependency.
+    $this->assertArrayHasKey('#ajax', $form['presentation']);
+    $this->assertSame('details', $form['presentation_settings']['#type']);
+    $this->assertSame('checkbox', $form['presentation_settings']['show_summary']['#type']);
+    $this->assertArrayNotHasKey('columns', $form['presentation_settings']);
+
+    $form = $this->createBlock(['presentation' => 'grid'])->buildConfigurationForm([], new FormState());
+    $this->assertSame('number', $form['presentation_settings']['columns']['#type']);
+    $this->assertSame(3, $form['presentation_settings']['columns']['#default_value']);
+    $this->assertArrayNotHasKey('show_summary', $form['presentation_settings']);
   }
 
 }

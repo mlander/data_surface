@@ -18,6 +18,14 @@ the list that validates and the list that is offered are one list. Bundle
 refines against entity type and the field refines against both, live from
 site state, through the one refiner method on the class.
 
+The presentation settings are a **slot**: a list takes a summary flag, a
+grid takes a number of columns, and `presentation` chooses which. Both
+shapes are declared up front with `mountVariants()`, each as a small
+declaration method of its own, so the surface advertises both before
+anything is chosen, the form swaps the slot over AJAX when the
+presentation changes, and a grid's settings sent with a list chosen are
+refused on their path. See [Nesting](../../docs/nesting.md).
+
 ### The formatter: `data_surface_demo_string`
 
 Adoption on a host protocol with no validate and no submit hook. Field UI
@@ -43,7 +51,7 @@ drush pm:install data_surface_demo
 
 | Where | What to look at |
 | --- | --- |
-| `/admin/structure/block` | Place the **Data surface demo** block. Change the entity type and watch bundle and field rebuild over AJAX. |
+| `/admin/structure/block` | Place the **Data surface demo** block. Change the entity type and watch bundle and field rebuild over AJAX; change the presentation and watch its settings swap. |
 | `/admin/config/development/data-surface-demo` | The same surface as a standalone form, writing to State instead of block configuration. Needs `administer site configuration`. |
 | Manage display, on any bundle with a string field | Choose the **Data surface demo formatter** and open its settings. |
 

@@ -42,11 +42,11 @@ prose.
 | | Classic | | Surface | |
 | --- | ---: | ---: | ---: | ---: |
 | | **lines** | **code** | **lines** | **code** |
-| Block plugin | 375 | 219 | 242 | 148 |
+| Block plugin | 468 | 281 | 300 | 177 |
 | Formatter plugin | 285 | 167 | 151 | 101 |
 | Variant vocabulary | — | — | 116 | 40 |
-| Config schema | 45 | 41 | 60 | 53 |
-| **Total** | **705** | **427** | **569** | **342** |
+| Config schema | 64 | 58 | 82 | 70 |
+| **Total** | **817** | **506** | **649** | **388** |
 
 Three of those rows are worth a sentence.
 
@@ -63,7 +63,14 @@ Three of those rows are worth a sentence.
   which the classic version has no way to offer.
 - The **block plugin** difference is smaller than the formatter's,
   because both block files carry the same forty-odd lines of dependency
-  injection, which neither approach changes.
+  injection, which neither approach changes. The presentation settings
+  widened it: a grid's settings and a list's are a slot on the surface
+  side, declared as two small variant declarations, and on the classic
+  side they are a branch in the form, a branch in the submit handler, a
+  defaults table per presentation, and an override of
+  `setConfiguration()`, because block configuration is merged deep over
+  the defaults and a grid would otherwise arrive carrying the list's
+  summary flag.
 
 ## Concepts, which is the real difference
 
@@ -78,17 +85,18 @@ approach changes.
 
 | What the author has to touch | Classic | Surface |
 | --- | ---: | ---: |
-| Form API element definitions | 8 | 0 |
-| AJAX wiring (`#ajax` arrays, callbacks, wrappers) | 4 | 0 |
-| Value casting and storage assignments | 7 | 0 |
-| Default values written out | 6 | 0 |
+| Form API element definitions | 11 | 0 |
+| AJAX wiring (`#ajax` arrays, callbacks, wrappers) | 5 | 0 |
+| Value casting and storage assignments | 9 | 0 |
+| Default values written out | 8 | 0 |
 | Validation written by hand | 1 | 0 |
 | Label lists kept in step with the form | 1 | 0 |
 | Live option lists read from the site | 3 | 2 |
+| Settings whose shape another setting chooses | 3 | 1 |
 | Surface declaration | 0 | 1 |
 | Refiner method dispatching to those lists | 0 | 1 |
 | Config schema files | 1 | 1 |
-| **Distinct mechanisms in play** | **8** | **4** |
+| **Distinct mechanisms in play** | **9** | **5** |
 
 ### The formatter
 
@@ -105,7 +113,7 @@ approach changes.
 | Config schema files | 1 | 1 |
 | **Distinct mechanisms in play** | **8** | **4** |
 
-Eight against four on the block, eight against four on the formatter. The
+Nine against five on the block, eight against four on the formatter. The
 mechanisms the classic version sheds — form elements, AJAX, storage,
 defaults, validation — are also the ones that have to agree with each
 other, and nothing checks that they do: a key added to

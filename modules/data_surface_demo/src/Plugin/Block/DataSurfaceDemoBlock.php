@@ -12,6 +12,7 @@ use Drupal\Core\Plugin\ContainerFactoryPluginInterface;
 use Drupal\Core\StringTranslation\TranslatableMarkup;
 use Drupal\Core\TypedData\DataDefinition;
 use Drupal\Core\TypedData\DataDefinitionInterface;
+use Drupal\Core\TypedData\MapDataDefinition;
 use Drupal\data_surface\DataSurfaceBuilderInterface;
 use Drupal\data_surface\DefinitionMetadata;
 use Drupal\data_surface\Plugin\Block\DataSurfaceBlockBase;
@@ -23,6 +24,11 @@ use Symfony\Component\DependencyInjection\ContainerInterface;
  * One declaration, one refiner, and build(). No defaultConfiguration,
  * no blockForm, no blockValidate, no blockSubmit. The classic demo
  * writes all four out; see modules/data_surface_demo_classic.
+ *
+ * The presentation settings are a slot: their shape depends on the
+ * presentation chosen beside them, so each presentation's shape is
+ * declared up front as a variant, and the generated form swaps the slot
+ * over AJAX when the presentation changes. See docs/nesting.md.
  *
  * @see modules/data_surface_demo_classic/README.md
  */
@@ -118,10 +124,62 @@ final class DataSurfaceDemoBlock extends DataSurfaceBlockBase implements Contain
       ->addConstraint('Range', ['min' => 1, 'max' => 50]));
     $builder->setDefault('limit', 10);
 
+    // "It depends", declared statically. Which settings the items take
+    // depends on how they are laid out, so the layout is a discriminator
+    // and its settings are a slot with one shape per layout. Refinement
+    // never swaps a shape: every variant is advertised before anything
+    // is chosen, and choosing only picks one.
+    $builder->setDefinition('presentation', DataDefinition::create('string')
+      ->setLabel(new TranslatableMarkup('Presentation'))
+      ->setDescription(new TranslatableMarkup('How the featured items are laid out.'))
+      ->setRequired(TRUE)
+      ->addConstraint('LabeledChoice', [
+        'choices' => [
+          'list' => new TranslatableMarkup('List'),
+          'grid' => new TranslatableMarkup('Grid'),
+        ],
+      ]));
+    $builder->setDefault('presentation', 'list');
+
+    $builder->setDefinition('presentation_settings', MapDataDefinition::create()
+      ->setLabel(new TranslatableMarkup('Presentation settings'))
+      ->setDescription(new TranslatableMarkup('The settings of the chosen presentation.')));
+    $builder->mountVariants('presentation_settings', 'presentation', [
+      'list' => static::declareListPresentation(...),
+      'grid' => static::declareGridPresentation(...),
+    ]);
+  }
+
+  /**
+   * Declares what a list presentation takes.
+   *
+   * A variant is a small surface of its own, declared the way the block
+   * declares itself: handed a builder, saying its keys into it. It binds
+   * no refiner, so nothing here may depend on the block's other keys.
+   *
+   * @param \Drupal\data_surface\DataSurfaceBuilderInterface $builder
+   *   The variant's own builder.
+   */
+  protected static function declareListPresentation(DataSurfaceBuilderInterface $builder): void {
     $builder->setDefinition('show_summary', DataDefinition::create('boolean')
       ->setLabel(new TranslatableMarkup('Show summaries'))
       ->setDescription(new TranslatableMarkup('Whether item summaries render.')));
     $builder->setDefault('show_summary', TRUE);
+  }
+
+  /**
+   * Declares what a grid presentation takes.
+   *
+   * @param \Drupal\data_surface\DataSurfaceBuilderInterface $builder
+   *   The variant's own builder.
+   */
+  protected static function declareGridPresentation(DataSurfaceBuilderInterface $builder): void {
+    $builder->setDefinition('columns', DataDefinition::create('integer')
+      ->setLabel(new TranslatableMarkup('Columns'))
+      ->setDescription(new TranslatableMarkup('How many items sit side by side.'))
+      ->setRequired(TRUE)
+      ->addConstraint('Range', ['min' => 1, 'max' => 6]));
+    $builder->setDefault('columns', 3);
   }
 
   /**

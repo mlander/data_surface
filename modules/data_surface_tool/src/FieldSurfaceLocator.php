@@ -6,6 +6,7 @@ namespace Drupal\data_surface_tool;
 
 use Drupal\Core\Access\AccessResult;
 use Drupal\Core\Access\AccessResultInterface;
+use Drupal\Core\Entity\EntityTypeManagerInterface;
 use Drupal\Core\Field\FieldConfigInterface;
 use Drupal\Core\Session\AccountInterface;
 use Drupal\Core\TypedData\TypedDataManagerInterface;
@@ -52,10 +53,67 @@ final class FieldSurfaceLocator {
    *
    * @param \Drupal\Core\TypedData\TypedDataManagerInterface $typedDataManager
    *   The typed data manager, which instantiates the field item.
+   * @param \Drupal\Core\Entity\EntityTypeManagerInterface $entityTypeManager
+   *   The entity type manager, which loads the field a subject names.
    */
   public function __construct(
     protected readonly TypedDataManagerInterface $typedDataManager,
+    protected readonly EntityTypeManagerInterface $entityTypeManager,
   ) {
+  }
+
+  /**
+   * Finds the field instance a subject names, saved or about to be.
+   *
+   * The subject is a field config id, `<entity type>.<bundle>.<field>`,
+   * which is the one id a field instance already has and the only
+   * vocabulary a caller addressing one needs. A field that exists is
+   * loaded. One that does not, on a bundle whose entity type has a
+   * storage of that name, is the instance adding it would create, built
+   * unsaved — which is what lets a field be described before it exists,
+   * exactly as Field UI's add form does.
+   *
+   * @param string $subject
+   *   The field config id.
+   *
+   * @return \Drupal\Core\Field\FieldConfigInterface|null
+   *   The field, or NULL when the subject is not three non-empty parts
+   *   naming an existing entity type and field storage.
+   */
+  public function fieldAt(string $subject): ?FieldConfigInterface {
+    $parts = explode('.', $subject);
+    if (count($parts) !== 3 || in_array('', $parts, TRUE)) {
+      return NULL;
+    }
+    [$entity_type_id, $bundle, $field_name] = $parts;
+    if (!$this->entityTypeManager->hasDefinition($entity_type_id) || !$this->entityTypeManager->hasDefinition('field_config')) {
+      return NULL;
+    }
+    $field = $this->entityTypeManager->getStorage('field_config')->load($subject);
+    if ($field instanceof FieldConfigInterface) {
+      return $field;
+    }
+    $storage = $this->entityTypeManager->getStorage('field_storage_config')->load($entity_type_id . '.' . $field_name);
+    if ($storage === NULL) {
+      return NULL;
+    }
+    return $this->entityTypeManager->getStorage('field_config')->create([
+      'field_storage' => $storage,
+      'bundle' => $bundle,
+    ]);
+  }
+
+  /**
+   * Answers whether a field instance's settings are described by a surface.
+   *
+   * @param \Drupal\Core\Field\FieldConfigInterface $field
+   *   The field config entity, saved or not.
+   *
+   * @return bool
+   *   TRUE when the field type declares a surface for its settings.
+   */
+  public function describes(FieldConfigInterface $field): bool {
+    return $this->fieldItem($field) !== NULL;
   }
 
   /**

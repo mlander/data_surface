@@ -11,3 +11,9 @@ services:
     arguments: ['@state']
     tags:
       - { name: event_subscriber }
+  # The child a parent mounts by coordinate in NestedSurfaceTest.
+  data_surface_test.dessert_resolver:
+    class: Drupal\data_surface_test\DessertSurfaceResolver
+    arguments: ['@data_surface.factory']
+    tags:
+      - { name: data_surface.surface_resolver }

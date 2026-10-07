@@ -205,9 +205,10 @@ the same message a tool caller gets.
   A surface's required key with a configured default is satisfied by
   saying nothing, so `SurfaceInputDefinitions` converts it as not
   required.
-- **Only list items are validated, not the list.** The uniqueness
-  constraint is enforced by the pipeline, not by the Tool API, and the
-  normalizer has no `uniqueItems` mapping, so it is said in the
-  description.
+- **No `uniqueItems`.** The Tool API now validates the whole input,
+  the list's own constraints included, so a repeated tag is refused
+  there before the pipeline sees it, in the Tool API's path spelling;
+  but the normalizer has no `uniqueItems` mapping, so the rule is said
+  in the description.
 - **A string sent for a list is wrapped into a list of one item** by
   typed data before validation, rather than refused as the wrong shape.

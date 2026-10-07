@@ -11,8 +11,9 @@ use Drupal\Core\Entity\EntityTypeManagerInterface;
 use Drupal\Core\Field\FieldConfigInterface;
 use Drupal\Core\Field\FieldTypePluginManagerInterface;
 use Drupal\Core\Session\AccountInterface;
-use Drupal\data_surface\DataSurfaceAccess;
+use Drupal\data_surface\DataSurfaceInterface;
 use Drupal\data_surface\Pipeline\DataSurfacePipelineInterface;
+use Drupal\data_surface\Pipeline\DataSurfaceResult;
 use Drupal\field\Entity\FieldConfig;
 use Drupal\field\Entity\FieldStorageConfig;
 use Drupal\tool\TypedData\InputDefinition;
@@ -21,12 +22,25 @@ use Drupal\tool\TypedData\InputDefinitionInterface;
 /**
  * The part of the two field tools that is about surfaces, not fields.
  *
- * Both tools refine the same settings input the same way and report
- * violations the same way, and neither of them contains a line of
- * knowledge about what a setting means: refining is a lookup plus a
- * conversion, and executing is one call to the pipeline. Everything the
- * settings could get wrong is described by the surface and enforced by
- * the pipeline, which is the point being demonstrated.
+ * Both tools are built from the same surface — the field instance
+ * surface FieldInstanceSurfaceProvider serves, addressed by the field
+ * config id their three identity inputs spell — and report violations
+ * the same way. Neither contains a line of knowledge about what a
+ * setting means.
+ *
+ * The settings input is that surface's `settings` mount, converted. It
+ * is not refined by the surface layer at all: the field type's settings
+ * are mounted by coordinate, so their shape is known the moment the
+ * field is named. What still runs through the Tool API's
+ * input_definition_refiners is the *address*: a Tool API invocation
+ * carries the field it is about as three ordinary inputs, and a refiner
+ * is the only place a tool hears them. That is the Tool API's static
+ * versus instance split, documented in the module README, and the
+ * static `settings` input on each attribute says so in its description
+ * rather than advertising a shape it does not have.
+ *
+ * Executing is one call to the pipeline with that same surface and the
+ * provider's target for the field the tool is writing.
  */
 trait SurfaceFieldSettingsTrait {
 
@@ -40,11 +54,11 @@ trait SurfaceFieldSettingsTrait {
   protected EntityTypeManagerInterface $entityTypeManager;
 
   /**
-   * The service that finds a field type's surface and its target.
+   * The provider of the field instance surface the tools are built from.
    *
-   * @var \Drupal\data_surface_tool\FieldSurfaceLocator
+   * @var \Drupal\data_surface_tool\FieldInstanceSurfaceProvider
    */
-  protected FieldSurfaceLocator $surfaceLocator;
+  protected FieldInstanceSurfaceProvider $fieldInstances;
 
   /**
    * The service that converts a surface into input definitions.
@@ -77,14 +91,9 @@ trait SurfaceFieldSettingsTrait {
   /**
    * Answers whether an account may administer an entity type's fields.
    *
-   * The permission name carries an entity type id and the id arrives as
-   * tool input, so it is never spelled into a permission before the
-   * entity type manager has confirmed the entity type exists. An id
-   * naming nothing is refused outright rather than turned into a
-   * permission string no role can hold, which would read to a site
-   * builder as a permission waiting to be granted. This is the answer
-   * for adding a field, where there is no field config entity yet to ask;
-   * once one exists, fieldUpdateAccess() asks the entity itself.
+   * The answer for adding a field, where there is no field config entity
+   * yet to ask; the entity type id arrives as tool input and is never
+   * spelled into a permission before it is known to name something.
    *
    * @param mixed $entity_type_id
    *   The entity type id as it arrived, not yet known to be a string or
@@ -96,10 +105,7 @@ trait SurfaceFieldSettingsTrait {
    *   The access result, forbidden when the entity type does not exist.
    */
   protected function fieldAdministrationAccess(mixed $entity_type_id, AccountInterface $account): AccessResultInterface {
-    if (!is_string($entity_type_id) || $entity_type_id === '' || !$this->entityTypeManager->hasDefinition($entity_type_id)) {
-      return AccessResult::forbidden();
-    }
-    return AccessResult::allowedIfHasPermission($account, 'administer ' . $entity_type_id . ' fields');
+    return $this->fieldInstances->administrationAccess($entity_type_id, $account);
   }
 
   /**
@@ -130,15 +136,11 @@ trait SurfaceFieldSettingsTrait {
   /**
    * Answers whether an account may configure one field's settings.
    *
-   * Two answers, and the field type gets the second one. The entity's
-   * own answer is the host gate and stays exactly what it was; the field
-   * type's surface may refuse on top of it, because a field type can
-   * know something about its settings that no generic field permission
-   * expresses — a locked instance, a setting only a site owner may
-   * touch. What it cannot do is open a door the entity closed, which is
-   * the rule DataSurfaceAccess::gate() holds both halves to, neutral
-   * included: a field type with nothing to say leaves the entity's
-   * answer untouched.
+   * The provider's answer for the field, which is two answers with the
+   * field type's second: the host gate stays exactly what it was — the
+   * field config entity's own access for a saved field, field
+   * administration for one about to be added — and the field type's
+   * surface may refuse on top of it but never open what it closed.
    *
    * @param \Drupal\Core\Field\FieldConfigInterface $field
    *   The field instance, saved or not.
@@ -149,10 +151,7 @@ trait SurfaceFieldSettingsTrait {
    *   The combined access result.
    */
   protected function fieldSettingsAccess(FieldConfigInterface $field, AccountInterface $account): AccessResultInterface {
-    return DataSurfaceAccess::gate(
-      $field->access('update', $account, TRUE),
-      $this->surfaceLocator->accessFor($field, account: $account),
-    );
+    return $this->fieldInstances->accessFor($field, $account);
   }
 
   /**
@@ -173,11 +172,10 @@ trait SurfaceFieldSettingsTrait {
    *   The combined access result.
    */
   protected function fieldAddAccess(array $values, AccountInterface $account): AccessResultInterface {
-    $host = $this->fieldAdministrationAccess($values['entity_type_id'] ?? NULL, $account);
     $field = $this->unsavedField($values);
     return $field === NULL
-      ? $host
-      : DataSurfaceAccess::gate($host, $this->surfaceLocator->accessFor($field, account: $account));
+      ? $this->fieldAdministrationAccess($values['entity_type_id'] ?? NULL, $account)
+      : $this->fieldSettingsAccess($field, $account);
   }
 
   /**
@@ -236,30 +234,54 @@ trait SurfaceFieldSettingsTrait {
   /**
    * Builds the settings input definition for one field instance.
    *
+   * The `settings` key of the field instance surface, converted: the
+   * field type's own settings surface, mounted by coordinate, with every
+   * key, its meaning, the values it allows and what it starts from.
+   *
    * @param \Drupal\Core\Field\FieldConfigInterface $field
    *   The field instance whose settings are being described. It need not
    *   be saved; an unsaved one describes a field about to be added.
    * @param \Drupal\tool\TypedData\InputDefinitionInterface $advertised
-   *   The unrefined definition, returned unchanged when neither a
-   *   surface nor a config schema can say anything better.
+   *   The static definition, returned unchanged when neither a surface
+   *   nor a config schema can say anything better.
    * @param mixed $default_value
    *   The default for the settings map as a whole.
    *
    * @return \Drupal\tool\TypedData\InputDefinitionInterface
-   *   The refined definition.
+   *   The definition for this field.
    */
   protected function settingsInputDefinition(FieldConfigInterface $field, InputDefinitionInterface $advertised, mixed $default_value): InputDefinitionInterface {
-    $surface = $this->surfaceLocator->surfaceFor($field);
+    $surface = $this->fieldInstances->surfaceFor($field);
     if ($surface !== NULL) {
-      return $this->surfaceInputDefinitions->fromSurface(
-        $surface,
-        $this->t('Field instance settings'),
-        $this->t('Settings for this field on this bundle, described by the field type itself: every key, its meaning, the values it allows and what it starts from.'),
-        FALSE,
-        $default_value,
-      );
+      $definition = $this->surfaceInputDefinitions->fromKey($surface, FieldInstanceSurfaceProvider::SETTINGS);
+      $definition->setDefaultValue($default_value);
+      return $definition;
     }
     return $this->schemaSettingsInputDefinition($field->getType(), $default_value) ?? $advertised;
+  }
+
+  /**
+   * Runs one settings payload through the field instance surface.
+   *
+   * @param \Drupal\data_surface\DataSurfaceInterface $surface
+   *   The field instance surface.
+   * @param \Drupal\Core\Field\FieldConfigInterface $field
+   *   The field the settings are written to, which the target saves.
+   * @param mixed $settings
+   *   The settings input.
+   * @param \Drupal\Core\Access\AccessResultInterface $access
+   *   The access answer the tool already resolved.
+   *
+   * @return \Drupal\data_surface\Pipeline\DataSurfaceResult
+   *   The pipeline's result.
+   */
+  protected function submitSettings(DataSurfaceInterface $surface, FieldConfigInterface $field, mixed $settings, AccessResultInterface $access): DataSurfaceResult {
+    return $this->pipeline->submit(
+      $surface,
+      [FieldInstanceSurfaceProvider::SETTINGS => is_array($settings) ? $settings : []],
+      $this->fieldInstances->targetFor($field),
+      access: $access,
+    );
   }
 
   /**

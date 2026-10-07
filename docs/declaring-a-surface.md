@@ -294,6 +294,13 @@ the rest; `setPropertyDefinition()` does one at a time. Both refuse a key
 the builder does not hold, and a key whose definition takes no
 properties. The address field type's item class is the worked example.
 
+When a map's properties are another surface's keys — a field type's
+settings, a plugin's configuration — do not restate them: `mount()` the
+other surface at the key, by its coordinate. And when *which* properties
+a map has depends on a sibling's value, do not swap them in a refiner,
+which may only narrow values: declare every shape up front with
+`mountVariants()`. Both are in [Nesting](nesting.md).
+
 A list is constructed around its item definition rather than described
 into one, so write `new ListDataDefinition(['type' => 'list'], $item)`
 and describe the list fluently afterwards. Core's

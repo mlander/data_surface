@@ -91,7 +91,8 @@ class ClassicParityTest extends DataSurfaceKernelTestBase {
       'field' => NULL,
       'headline' => 'Featured content',
       'limit' => 10,
-      'show_summary' => TRUE,
+      'presentation' => 'list',
+      'presentation_settings' => ['show_summary' => TRUE],
     ], $this->settingsOf($surface));
   }
 
@@ -131,7 +132,8 @@ class ClassicParityTest extends DataSurfaceKernelTestBase {
           'bundle' => 'article',
           'field' => 'title',
           'limit' => '5',
-          'show_summary' => 0,
+          'presentation' => 'list',
+          'presentation_settings' => ['show_summary' => 0],
         ],
         [
           'bundle' => 'article',
@@ -139,7 +141,8 @@ class ClassicParityTest extends DataSurfaceKernelTestBase {
           'field' => 'title',
           'headline' => 'Latest articles',
           'limit' => 5,
-          'show_summary' => FALSE,
+          'presentation' => 'list',
+          'presentation_settings' => ['show_summary' => FALSE],
         ],
       ],
       'optional selects left alone' => [
@@ -149,7 +152,8 @@ class ClassicParityTest extends DataSurfaceKernelTestBase {
           'bundle' => '',
           'field' => '',
           'limit' => '1',
-          'show_summary' => 1,
+          'presentation' => 'list',
+          'presentation_settings' => ['show_summary' => 1],
         ],
         [
           'bundle' => NULL,
@@ -157,7 +161,8 @@ class ClassicParityTest extends DataSurfaceKernelTestBase {
           'field' => NULL,
           'headline' => 'Everything',
           'limit' => 1,
-          'show_summary' => TRUE,
+          'presentation' => 'list',
+          'presentation_settings' => ['show_summary' => TRUE],
         ],
       ],
       'a bundle with no fields to pick from' => [
@@ -167,7 +172,8 @@ class ClassicParityTest extends DataSurfaceKernelTestBase {
           'bundle' => 'user',
           'field' => '',
           'limit' => '50',
-          'show_summary' => '1',
+          'presentation' => 'list',
+          'presentation_settings' => ['show_summary' => '1'],
         ],
         [
           'bundle' => 'user',
@@ -175,7 +181,28 @@ class ClassicParityTest extends DataSurfaceKernelTestBase {
           'field' => NULL,
           'headline' => 'People',
           'limit' => 50,
-          'show_summary' => TRUE,
+          'presentation' => 'list',
+          'presentation_settings' => ['show_summary' => TRUE],
+        ],
+      ],
+      'the grid presentation, after the form swapped to it' => [
+        [
+          'headline' => 'Gallery',
+          'entity_type' => 'user',
+          'bundle' => '',
+          'field' => '',
+          'limit' => '12',
+          'presentation' => 'grid',
+          'presentation_settings' => ['columns' => '4'],
+        ],
+        [
+          'bundle' => NULL,
+          'entity_type' => 'user',
+          'field' => NULL,
+          'headline' => 'Gallery',
+          'limit' => 12,
+          'presentation' => 'grid',
+          'presentation_settings' => ['columns' => 4],
         ],
       ],
     ];
@@ -190,7 +217,8 @@ class ClassicParityTest extends DataSurfaceKernelTestBase {
       'entity_type' => 'node',
       'bundle' => 'article',
       'limit' => 5,
-      'show_summary' => FALSE,
+      'presentation' => 'grid',
+      'presentation_settings' => ['columns' => 2],
     ];
     $surface = $this->createBlock('data_surface_demo', $configuration)->build();
     $classic = $this->createBlock('data_surface_demo_classic', $configuration)->build();
@@ -201,6 +229,7 @@ class ClassicParityTest extends DataSurfaceKernelTestBase {
     );
     $this->assertContains('Bundle: article', array_map('strval', $surface['#items']));
     $this->assertContains('Highlight field: not configured', array_map('strval', $surface['#items']));
+    $this->assertContains('Presentation: grid', array_map('strval', $surface['#items']));
     $this->assertSame($classic['#title'], $surface['#title']);
     $this->assertSame($classic['#theme'], $surface['#theme']);
   }
@@ -337,6 +366,13 @@ class ClassicParityTest extends DataSurfaceKernelTestBase {
    *   The stored settings, with the block host's own keys removed.
    */
   protected function submitBlock(BlockPluginInterface $block, array $input): array {
+    // A person reaches a presentation other than the stored one by
+    // choosing it, which rebuilds the form around it before anything is
+    // typed into its settings. Both blocks are handed that rebuilt form.
+    $block->setConfiguration([
+      'presentation' => $input['presentation'] ?? 'list',
+      'presentation_settings' => [],
+    ] + $block->getConfiguration());
     $form_state = new FormState();
     $form = $block->buildConfigurationForm([], $form_state);
     $form_state->setValues($input + [

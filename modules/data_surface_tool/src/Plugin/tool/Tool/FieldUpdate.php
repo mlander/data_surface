@@ -81,7 +81,7 @@ use Symfony\Component\DependencyInjection\ContainerInterface;
     ),
     'settings' => new MapInputDefinition(
       label: new TranslatableMarkup('Field settings'),
-      description: new TranslatableMarkup('Field instance settings to update, not storage settings. Once the entity type, bundle and field name are known this is replaced by the settings the field type describes, or by its config schema when it describes none.'),
+      description: new TranslatableMarkup('Field instance settings to update, not storage settings. Their shape is decided by the field type, so it is known once the entity type, bundle and field name name the field: then this is the settings the field type describes, or its config schema when it describes none.'),
       required: FALSE,
     ),
   ],
@@ -118,7 +118,7 @@ class FieldUpdate extends ToolBase implements InputDefinitionRefinerInterface {
     $instance->entityTypeManager = $container->get('entity_type.manager');
     $instance->fieldTypePluginManager = $container->get('plugin.manager.field.field_type');
     $instance->typedConfigManager = $container->get('config.typed');
-    $instance->surfaceLocator = $container->get('data_surface_tool.field_surface_locator');
+    $instance->fieldInstances = $container->get('data_surface_tool.field_instance_provider');
     $instance->surfaceInputDefinitions = $container->get('data_surface_tool.input_definitions');
     $instance->pipeline = $container->get('data_surface.pipeline');
     return $instance;
@@ -177,13 +177,12 @@ class FieldUpdate extends ToolBase implements InputDefinitionRefinerInterface {
     }
 
     if (is_array($settings)) {
-      $surface = $this->surfaceLocator->surfaceFor($field);
-      $target = $surface === NULL ? NULL : $this->surfaceLocator->targetFor($field);
-      if ($surface !== NULL && $target !== NULL) {
+      $surface = $this->fieldInstances->surfaceFor($field);
+      if ($surface !== NULL) {
         // The target holds the field this method already set the label
         // and the rest on, so its commit saves those too and the field
         // is written once.
-        $result = $this->pipeline->submit($surface, $settings, $target, access: $access);
+        $result = $this->submitSettings($surface, $field, $settings, $access);
         if (!$result->isValid()) {
           return ExecutableResult::failure($this->t('The settings for field @field were refused: @violations', [
             '@field' => $field_name,

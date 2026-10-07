@@ -121,6 +121,9 @@ interface DataSurfacePipelineInterface {
    * @throws \Drupal\data_surface\Pipeline\ShapeMismatchException
    *   When the input carries a value in a shape its definition cannot
    *   hold, such as a string where a map was advertised.
+   * @throws \Drupal\data_surface\Pipeline\VariantMismatchException
+   *   When a slot's value carries keys that belong to a variant other
+   *   than the one its discriminator chose.
    */
   public function accept(DataSurfaceInterface $surface, array $input, array $current = []): array;
 

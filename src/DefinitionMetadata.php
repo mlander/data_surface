@@ -57,6 +57,15 @@ final class DefinitionMetadata {
   protected const SECRET_KEY = 'secret';
 
   /**
+   * The definition array key marking a slot placeholder.
+   *
+   * Holds the name of the sibling key whose value chooses the slot's
+   * variant. Not a core proposal: core has no union, and this is the
+   * smallest thing a definition can say about being one.
+   */
+  protected const SLOT_KEY = 'data_surface_slot';
+
+  /**
    * Declares the value a definition starts from.
    *
    * @param \Drupal\Core\TypedData\DataDefinitionInterface $definition
@@ -280,6 +289,45 @@ final class DefinitionMetadata {
       return FALSE;
     }
     return $definition->offsetExists(static::SECRET_KEY) && (bool) $definition->offsetGet(static::SECRET_KEY);
+  }
+
+  /**
+   * Marks a definition as the placeholder of a slot.
+   *
+   * A slot's placeholder is typed `any` until its discriminator holds a
+   * value, and `any` alone reads as "anything at all". The mark is what
+   * lets a reader holding nothing but the definition know it is instead
+   * "one of the declared variants, chosen by that key"; the variant table
+   * itself lives on the surface entry, which is where an emitter reads it.
+   *
+   * @param \Drupal\Core\TypedData\DataDefinitionInterface $definition
+   *   The placeholder.
+   * @param string $by
+   *   The sibling key whose value chooses the variant.
+   *
+   * @see \Drupal\data_surface\SurfaceSlot
+   */
+  public static function setSlot(DataDefinitionInterface $definition, string $by): void {
+    static::arrayAccess($definition)->offsetSet(static::SLOT_KEY, $by);
+  }
+
+  /**
+   * Gets the key that chooses a slot placeholder's variant.
+   *
+   * @param \Drupal\Core\TypedData\DataDefinitionInterface $definition
+   *   The definition to read.
+   *
+   * @return string|null
+   *   The discriminator key, or NULL when the definition is not a slot
+   *   placeholder — which includes a slot that has already resolved to
+   *   its variant's map.
+   */
+  public static function slotOf(DataDefinitionInterface $definition): ?string {
+    if (!$definition instanceof \ArrayAccess || !$definition->offsetExists(static::SLOT_KEY)) {
+      return NULL;
+    }
+    $by = $definition->offsetGet(static::SLOT_KEY);
+    return is_string($by) ? $by : NULL;
   }
 
   /**

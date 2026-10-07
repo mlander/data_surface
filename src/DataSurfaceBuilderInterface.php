@@ -271,6 +271,104 @@ interface DataSurfaceBuilderInterface {
   public function setThirdPartyShape(string $provider, SettingsShapeInterface $shape): static;
 
   /**
+   * Fixes a nested surface at one key.
+   *
+   * The key's definition becomes a map whose property definitions are
+   * the child's definitions, in the child's order. What the key holds is
+   * the child's to say — its shape is known from the child's address, not
+   * from any value — so the child is never restated and never refined
+   * from the parent's frame:
+   * - Refinement inside the mount is the child's own. When the parent is
+   *   refined, the child is refined against the value at this key, and
+   *   its refiners are dispatched under the child's own key names. No
+   *   parent refiner ever matches into a child path.
+   * - The child's contributors and filters already ran when it was
+   *   built; mounting it does not run them again.
+   * - Paths into the mount are dotted from the parent: a violation of
+   *   the child's `columns` at `settings` is reported as
+   *   `settings.columns`.
+   * - The child's cacheability is merged into the parent's at seal.
+   *
+   * The child may be given three ways:
+   * - A DataSurfaceCoordinate, preferred whenever the child is somebody
+   *   else's surface: the factory resolves it at seal, the child's own
+   *   build event runs, and the address is kept on the entry so whatever
+   *   advertises the parent can name the child. A builder holding a
+   *   coordinate can only be sealed by the factory.
+   * - A sealed DataSurfaceInterface, for a caller already holding one.
+   * - A callable taking a DataSurfaceBuilderInterface, for a small child
+   *   that is part of its parent's own declaration — the same signature
+   *   as declareDataSurface(), so `[Other::class, 'declareDataSurface']`
+   *   works too. It is said into a fresh builder at seal, with no
+   *   refiner bound, and it dispatches no build event of its own.
+   *
+   * A key may be described before it is mounted with an empty
+   * MapDataDefinition carrying its label and description; that map is
+   * kept as the shell the child's definitions are written into, and
+   * getDefinition() hands it back until seal.
+   *
+   * @param string $key
+   *   The surface key.
+   * @param \Drupal\data_surface\DataSurfaceInterface|\Drupal\data_surface\DataSurfaceCoordinate|callable $child
+   *   The child surface, its address, or a callable declaring it.
+   *
+   * @return $this
+   *
+   * @throws \InvalidArgumentException
+   *   When the key already holds a definition other than an empty map.
+   * @throws \LogicException
+   *   When the key is already a mount, or the builder is sealed.
+   *
+   * @see docs/nesting.md
+   */
+  public function mount(string $key, DataSurfaceInterface|DataSurfaceCoordinate|callable $child): static;
+
+  /**
+   * Declares a key whose shape a sibling chooses, out of a fixed set.
+   *
+   * The shape-versus-values rule made usable: refinement may only narrow
+   * values, so when a key's *shape* depends on another key's answer, the
+   * shape is declared statically as a union instead. Statically the
+   * surface advertises all of it:
+   * - The discriminator: `$by` gains a Choice over the variant ids. If it
+   *   already carries a list of allowed values the variant ids must all
+   *   be in it, and the list is narrowed to them; at seal the two must
+   *   agree exactly, so a contributor adding a value without a variant
+   *   is refused there.
+   * - Every variant's shape, on the entry's SurfaceSlot.
+   * - A placeholder definition for the key itself, typed `any` and
+   *   marked with DefinitionMetadata::setSlot().
+   *
+   * The key refines against `$by`, so with a value for the discriminator
+   * the key's definition is exactly that variant's map, and a generated
+   * form rebuilds the slot over AJAX when the discriminator changes.
+   * Values are held to the chosen variant: the pipeline hands the slot's
+   * value to that variant's child, and a payload shaped for another
+   * variant is refused on the slot, by path.
+   *
+   * @param string $key
+   *   The slot's surface key.
+   * @param string $by
+   *   The sibling key whose value chooses the variant. It must already
+   *   be declared, and hold a single value.
+   * @param array<string, \Drupal\data_surface\DataSurfaceInterface|\Drupal\data_surface\DataSurfaceCoordinate|callable> $variants
+   *   One child per allowed value of `$by`, keyed by that value, each
+   *   given any way mount() takes one.
+   *
+   * @return $this
+   *
+   * @throws \InvalidArgumentException
+   *   When there are no variants, a variant is not a child, the
+   *   discriminator is the key itself, unknown, or not a single value.
+   * @throws \LogicException
+   *   When a variant names a value the discriminator does not allow, the
+   *   key is already a mount, or the builder is sealed.
+   *
+   * @see docs/nesting.md
+   */
+  public function mountVariants(string $key, string $by, array $variants): static;
+
+  /**
    * Gets an output definition, so alters can inspect or modify it.
    *
    * @param string $name
@@ -508,15 +606,25 @@ interface DataSurfaceBuilderInterface {
    * against something the surface never accepts could not be refined at
    * all.
    *
+   * Mounted children are sealed here too: a coordinate is resolved
+   * through the factory handed in, an inline declaration is sealed into a
+   * child of its own, and each child's cacheability joins the parent's.
+   *
+   * @param \Drupal\data_surface\DataSurfaceFactoryInterface|null $factory
+   *   The factory sealing this builder, which resolves any coordinate a
+   *   mount names. Passed by DataSurfaceFactoryInterface::build(); a
+   *   builder sealed by hand passes nothing and may hold no coordinate.
+   *
    * @return \Drupal\data_surface\DataSurfaceInterface
    *   The advertised surface.
    *
    * @throws \LogicException
-   *   When a key refines, directly or indirectly, against itself.
+   *   When a key refines, directly or indirectly, against itself, or a
+   *   mount cannot be sealed as declared.
    * @throws \InvalidArgumentException
    *   When an output refinement names an output, or an input key the
    *   surface does not declare.
    */
-  public function seal(): DataSurfaceInterface;
+  public function seal(?DataSurfaceFactoryInterface $factory = NULL): DataSurfaceInterface;
 
 }

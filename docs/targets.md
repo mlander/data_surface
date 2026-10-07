@@ -6,7 +6,7 @@ whether a form, a config action, a test or an agent is doing the
 submitting, and what lets one destination serve the surface for adding a
 thing and the surface for editing it.
 
-This page is about the second half: the seven shipped targets, the
+This page is about the second half: the eight shipped targets, the
 prepare-versus-commit split, dry runs, what may ride on a form, and the
 one small interface a target uses when the input shape and the storage
 shape differ. [The pipeline](pipeline.md) is the other half, and the
@@ -152,7 +152,7 @@ Config entities have no equivalent: their storage writes through the
 container's config factory, so an entity cannot be pointed at another
 bin for one call. An unsaved clone is as far as that dry run goes.
 
-## The seven shipped targets
+## The eight shipped targets
 
 | Target | Destination | Artifact |
 | --- | --- | --- |
@@ -163,6 +163,7 @@ bin for one call. An unsaved clone is as far as that dry run goes.
 | `BaseFieldOverrideTarget` | A bundle's overrides of an entity type's base fields. | The overrides to save and the overrides to remove. |
 | `PluginConfigurationTarget` | A plugin's configuration array. | The complete configuration. |
 | `CompositeTarget` | Several of the above, in order. | One prepared set per child. |
+| `MountTarget` | Each mounted child's own target, handed the child surface. | One prepared set per mount, by key. |
 
 A few things each of them is opinionated about:
 
@@ -201,6 +202,14 @@ A few things each of them is opinionated about:
   earlier one to have happened: base field overrides belong to a bundle,
   so on an add operation the target that creates the bundle must be
   listed first.
+- **`MountTarget`** stores a mount's value through the target its child
+  comes with, and hands that target the *child* surface, so whatever the
+  target reads from the surface — a field type's secrets, its storage
+  shape — is about the values it is writing. It owns only the mount keys
+  it was given; pair it with the rest inside a `CompositeTarget`. The
+  field tools' surface is the shipped example: one mount, `settings`,
+  written by the field type's `FieldSettingsTarget`. See
+  [Nesting](nesting.md).
 
 ## Config schema, and whose violation it is
 

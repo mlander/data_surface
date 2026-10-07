@@ -8,12 +8,16 @@ use Drupal\Core\StringTranslation\StringTranslationTrait;
 use Drupal\Core\StringTranslation\TranslatableMarkup;
 use Drupal\Core\StringTranslation\TranslationInterface;
 use Drupal\Core\TypedData\ComplexDataDefinitionInterface;
+use Drupal\Core\TypedData\DataDefinition;
 use Drupal\Core\TypedData\DataDefinitionInterface;
 use Drupal\Core\TypedData\ListDataDefinitionInterface;
 use Drupal\data_surface\DataSurfaceInterface;
+use Drupal\data_surface\DefinitionMap;
 use Drupal\data_surface\DefinitionMetadata;
 use Drupal\data_surface\Options\DataSurfaceOptions;
 use Drupal\data_surface\Pipeline\ValueState;
+use Drupal\data_surface\SurfaceEntry;
+use Drupal\data_surface\SurfaceSlot;
 use Drupal\tool\TypedData\InputDefinition;
 use Drupal\tool\TypedData\InputDefinitionInterface;
 use Drupal\tool\TypedData\ListInputDefinition;
@@ -57,6 +61,13 @@ use Drupal\tool\TypedData\OutputDefinitionInterface;
  * The surface's outputs convert the same way, into the output
  * definitions the Tool API declares outputs with; outputsFromSurface()
  * says what that direction loses on top of these two.
+ *
+ * Nested surfaces convert by kind. A mount is a nested map input whose
+ * properties are the child's keys, locks included. A slot whose
+ * discriminator holds a value is exactly that variant's map. A slot
+ * whose discriminator holds nothing is the union of its variants —
+ * fromSlot() says why that is the widest honest schema the Tool API
+ * can carry and what it cannot say.
  *
  * One Tool API gap is worth naming here rather than in a method
  * docblock, because it is why the two tools in this module still
@@ -124,27 +135,193 @@ final class SurfaceInputDefinitions {
    *   The map input definition.
    */
   public function fromSurface(DataSurfaceInterface $surface, TranslatableMarkup|string $label, TranslatableMarkup|string $description, bool $required = FALSE, mixed $default_value = NULL): MapInputDefinition {
-    $properties = [];
-    $definitions = $surface->getDefinitions();
-    foreach ($definitions as $name => $definition) {
-      $property = $this->fromDefinition($definition);
-      if ($definitions->isLocked($name)) {
-        // A locked surface key has exactly one legal value, and the Tool
-        // API has the same idea for a whole input. It has no effect on a
-        // map's property today, because only top level inputs are
-        // filtered by it; carrying it anyway keeps the statement in the
-        // definition for the day the normalizer reads it.
-        $property->setLocked();
-      }
-      $properties[$name] = $property;
-    }
     return new MapInputDefinition(
       label: $label,
       description: $description,
       required: $required,
       default_value: $default_value,
+      property_definitions: $this->propertiesOf($surface->getDefinitions()),
+    );
+  }
+
+  /**
+   * Converts one key of a surface into one input definition.
+   *
+   * For a tool whose inputs are some of a surface's keys rather than the
+   * whole surface in one map: the key converts exactly as it would as a
+   * property of fromSurface()'s map, mount or slot included.
+   *
+   * @param \Drupal\data_surface\DataSurfaceInterface $surface
+   *   The surface.
+   * @param string $name
+   *   The surface key.
+   *
+   * @return \Drupal\tool\TypedData\InputDefinitionInterface
+   *   The input definition.
+   *
+   * @throws \InvalidArgumentException
+   *   When the surface declares no such key.
+   */
+  public function fromKey(DataSurfaceInterface $surface, string $name): InputDefinitionInterface {
+    $entry = $surface->getDefinitions()->entry($name)
+      ?? throw new \InvalidArgumentException(sprintf('The surface declares no "%s" key.', $name));
+    return $this->fromEntry($entry);
+  }
+
+  /**
+   * Converts every key of one definition map, in order.
+   *
+   * @param \Drupal\data_surface\DefinitionMap $definitions
+   *   The map.
+   *
+   * @return array<string, \Drupal\tool\TypedData\InputDefinitionInterface>
+   *   The input definitions, keyed by surface key.
+   */
+  protected function propertiesOf(DefinitionMap $definitions): array {
+    $properties = [];
+    foreach ($definitions->entries() as $name => $entry) {
+      $properties[$name] = $this->fromEntry($entry);
+    }
+    return $properties;
+  }
+
+  /**
+   * Converts one surface entry, by what kind of key it is.
+   *
+   * @param \Drupal\data_surface\SurfaceEntry $entry
+   *   The entry.
+   *
+   * @return \Drupal\tool\TypedData\InputDefinitionInterface
+   *   The input definition.
+   */
+  protected function fromEntry(SurfaceEntry $entry): InputDefinitionInterface {
+    if ($entry->slot !== NULL && DefinitionMetadata::slotOf($entry->definition) !== NULL) {
+      $property = $this->fromSlot($entry->slot, $entry->definition);
+    }
+    else {
+      $property = $this->fromDefinition($entry->definition);
+      if ($entry->mount !== NULL && $property instanceof MapInputDefinition) {
+        // The child's keys are the map's properties, so the child's
+        // locks are theirs too.
+        $child = $entry->mount->child->getDefinitions();
+        foreach ($property->getPropertyDefinitions() as $name => $nested) {
+          if ($nested instanceof InputDefinitionInterface && $child->isLocked((string) $name)) {
+            $nested->setLocked();
+          }
+        }
+      }
+    }
+    if ($entry->locked) {
+      // A locked surface key has exactly one legal value, and the Tool
+      // API has the same idea for a whole input. It has no effect on a
+      // map's property today, because only top level inputs are
+      // filtered by it; carrying it anyway keeps the statement in the
+      // definition for the day the normalizer reads it.
+      $property->setLocked();
+    }
+    return $property;
+  }
+
+  /**
+   * Converts a slot whose discriminator holds nothing yet.
+   *
+   * What is true before anything is chosen is that the value is one of
+   * the variants' maps, and which one is decided by a sibling. JSON
+   * Schema can say exactly that — at the level of the object holding
+   * both keys, an `if` on the discriminator's `const` with a `then` per
+   * variant, or a `oneOf` over whole objects — but the Tool API cannot:
+   * MapInputDefinition carries one property list, the normalizer emits
+   * `properties` and `required` and nothing else for a map, and the
+   * normalize event swaps a definition for another definition rather than
+   * letting anything write schema keywords. A union inside the slot alone
+   * would not do either, because the discriminator is not inside it.
+   *
+   * So this is the widest honest schema the Tool API can carry: one map
+   * holding every variant's keys, none of them required, each saying in
+   * its description which values of the discriminator it belongs to, and
+   * the map's description naming the whole table. A key two variants
+   * declare differently is widened to `any` rather than advertised in one
+   * variant's terms. Every key is validated by its own constraints when
+   * it is sent; that a key belongs to the variant that was chosen is
+   * enforced by the pipeline, on the slot's path.
+   *
+   * @param \Drupal\data_surface\SurfaceSlot $slot
+   *   The variant table.
+   * @param \Drupal\Core\TypedData\DataDefinitionInterface $placeholder
+   *   The slot's placeholder, which carries its label and description.
+   *
+   * @return \Drupal\tool\TypedData\MapInputDefinition
+   *   The union.
+   */
+  protected function fromSlot(SurfaceSlot $slot, DataDefinitionInterface $placeholder): MapInputDefinition {
+    $definitions = [];
+    $owners = [];
+    foreach ($slot->variants as $id => $variant) {
+      foreach ($variant->child->getDefinitions() as $name => $definition) {
+        $owners[$name][] = (string) $id;
+        if (!isset($definitions[$name])) {
+          $definitions[$name] = $definition;
+        }
+        elseif ($definitions[$name] != $definition) {
+          $definitions[$name] = DataDefinition::create('any')->setLabel($definitions[$name]->getLabel());
+        }
+      }
+    }
+    $properties = [];
+    $table = [];
+    foreach ($definitions as $name => $definition) {
+      // A key of one variant is absent from every other, so none is
+      // required here; the chosen variant's own requirements are the
+      // pipeline's to hold. Said on a copy, so the variant's own
+      // definition is never touched.
+      $definition = clone $definition;
+      if ($definition instanceof DataDefinition) {
+        $definition->setDescription($this->appended($this->description($definition), $this->t('Only when @by is @values.', [
+          '@by' => $slot->by,
+          '@values' => implode(', ', $owners[$name]),
+        ])));
+      }
+      $property = $this->fromDefinition($definition);
+      $property->setRequired(FALSE);
+      $properties[$name] = $property;
+    }
+    foreach ($slot->variants as $id => $variant) {
+      $table[] = $this->t('@value takes @keys', [
+        '@value' => $id,
+        '@keys' => implode(', ', $variant->child->getDefinitions()->names()) ?: $this->t('nothing'),
+      ]);
+    }
+    return new MapInputDefinition(
+      label: $this->label($placeholder),
+      description: $this->appended($this->description($placeholder), $this->t('Its shape is chosen by @by: @table.', [
+        '@by' => $slot->by,
+        '@table' => implode('; ', array_map('strval', $table)),
+      ])),
+      required: $this->requiredInPayload($placeholder),
+      constraints: $placeholder->getConstraints(),
       property_definitions: $properties,
     );
+  }
+
+  /**
+   * Appends a sentence to a description that may be empty.
+   *
+   * @param \Drupal\Core\StringTranslation\TranslatableMarkup|string $description
+   *   The description so far.
+   * @param \Drupal\Core\StringTranslation\TranslatableMarkup $note
+   *   The sentence to append.
+   *
+   * @return \Drupal\Core\StringTranslation\TranslatableMarkup
+   *   The description with the sentence appended.
+   */
+  protected function appended(TranslatableMarkup|string $description, TranslatableMarkup $note): TranslatableMarkup {
+    if ((string) $description === '') {
+      return $note;
+    }
+    return $this->t('@description @note', [
+      '@description' => $description,
+      '@note' => $note,
+    ]);
   }
 
   /**
@@ -363,14 +540,7 @@ final class SurfaceInputDefinitions {
    *   The description with the note appended.
    */
   protected function secretNote(TranslatableMarkup|string $description): TranslatableMarkup {
-    $note = $this->t('Write only: the stored value is never returned, and sending nothing leaves it unchanged.');
-    if ((string) $description === '') {
-      return $note;
-    }
-    return $this->t('@description @note', [
-      '@description' => $description,
-      '@note' => $note,
-    ]);
+    return $this->appended($description, $this->t('Write only: the stored value is never returned, and sending nothing leaves it unchanged.'));
   }
 
   /**

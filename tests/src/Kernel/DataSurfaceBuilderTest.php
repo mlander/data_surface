@@ -93,6 +93,8 @@ class DataSurfaceBuilderTest extends DataSurfaceKernelTestBase {
       'addRefiner' => static fn (DataSurfaceBuilderInterface $b) => $b->addRefiner('casing', new CasingVariantRefiner()),
       'addFilter' => static fn (DataSurfaceBuilderInterface $b) => $b->addFilter(new VariantPolicyFilter('casing', ['none'])),
       'addCacheableDependency' => static fn (DataSurfaceBuilderInterface $b) => $b->addCacheableDependency(new CacheableMetadata()),
+      'mount' => static fn (DataSurfaceBuilderInterface $b) => $b->mount('nested', static function (DataSurfaceBuilderInterface $child): void {}),
+      'mountVariants' => static fn (DataSurfaceBuilderInterface $b) => $b->mountVariants('nested', 'casing', ['none' => static function (DataSurfaceBuilderInterface $child): void {}]),
     ];
 
     foreach ($mutations as $name => $mutation) {

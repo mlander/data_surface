@@ -103,7 +103,9 @@ class FieldToolsComparisonTest extends DataSurfaceKernelTestBase {
     $this->assertArrayHasKey('givenName', $overrides);
     $this->assertArrayHasKey('administrativeArea', $overrides);
     // And the values each one takes, with a label a person can read.
-    $this->assertSame(['hidden', 'optional', 'required'], $overrides['givenName']['enum']);
+    // An optional value may be sent as null, and the Tool API lists null
+    // in its enum to say so; the three values are the vocabulary.
+    $this->assertSame(['hidden', 'optional', 'required', NULL], $overrides['givenName']['enum']);
     $this->assertSame('First name', $overrides['givenName']['title']);
     $this->assertSame('Organization', $overrides['organization']['title']);
 

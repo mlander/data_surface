@@ -49,4 +49,26 @@ interface DataSurfaceFactoryInterface {
    */
   public function build(DataSurfaceBuilderInterface $builder, string $host_class, string $host_id): DataSurfaceInterface;
 
+  /**
+   * Builds the surface one coordinate addresses.
+   *
+   * The second way in, and still the one alter stage: the factory finds
+   * the resolver serving the coordinate's host type, and that resolver's
+   * provider builds through build() above. This is how a mount names its
+   * child by address rather than by object, and how anything holding only
+   * a coordinate — a discovery document, a wire caller — reaches the
+   * surface it names.
+   *
+   * @param \Drupal\data_surface\DataSurfaceCoordinate $coordinate
+   *   The coordinate.
+   *
+   * @return \Drupal\data_surface\DataSurfaceInterface
+   *   The surface, alters applied.
+   *
+   * @throws \InvalidArgumentException
+   *   When no resolver serves the coordinate, or the one that does cannot
+   *   place its operation or subject.
+   */
+  public function resolve(DataSurfaceCoordinate $coordinate): DataSurfaceInterface;
+
 }

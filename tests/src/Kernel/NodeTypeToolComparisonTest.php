@@ -138,7 +138,8 @@ class NodeTypeToolComparisonTest extends DataSurfaceKernelTestBase {
     $this->assertSame('Amount', $amount['title']);
     $this->assertSame(1, $amount['minimum']);
     $unit = $deadline['properties'][NodeTypeReviewSettings::UNIT];
-    $this->assertSame(['hours', 'days', 'weeks', NodeTypeReviewSettings::BUSINESS_DAYS], $unit['enum']);
+    // The unit is optional, so the Tool API lists null beside the units.
+    $this->assertSame(['hours', 'days', 'weeks', NodeTypeReviewSettings::BUSINESS_DAYS, NULL], $unit['enum']);
     $this->assertSame(NodeTypeReviewSettings::DEFAULT_UNIT, $unit['default']);
 
     $tags = $extras[NodeTypeReviewSettings::TAGS];
@@ -246,7 +247,9 @@ class NodeTypeToolComparisonTest extends DataSurfaceKernelTestBase {
     $result = $this->runSurfaceTool($this->contentType('late') + $this->extras($this->deadline(45, 'days'), []));
     $this->assertFalse($result->isSuccess());
     $message = (string) $result->getMessage();
-    $this->assertStringContainsString($path . ': ', $message);
+    // The Tool API runs the converted constraints itself before the tool
+    // does, and refuses in its own path spelling, naming the deadline.
+    $this->assertStringContainsString('(property ' . NodeTypeReviewSettings::DEADLINE . ')', $message);
     $this->assertStringContainsString('at most thirty days; 45 days is outside that', $message);
     $this->assertNull(NodeType::load('late'));
 
@@ -290,11 +293,10 @@ class NodeTypeToolComparisonTest extends DataSurfaceKernelTestBase {
     $this->assertNull(NodeType::load('typed'));
 
     // Every item well formed, one of them twice: the list is refused as a
-    // whole, by the pipeline, because the Tool API validates a list's
-    // items and not the list.
+    // whole, by the uniqueness constraint the surface declares on it.
     $result = $this->runSurfaceTool($this->contentType('repeat') + $this->extras(NULL, ['news', 'news']));
     $this->assertFalse($result->isSuccess());
-    $this->assertStringContainsString('third_party_settings.' . self::EXTRAS . '.' . NodeTypeReviewSettings::TAGS . ': Each item may be listed only once.', (string) $result->getMessage());
+    $this->assertStringContainsString('(property ' . NodeTypeReviewSettings::TAGS . ') Each item may be listed only once.', (string) $result->getMessage());
     $this->assertNull(NodeType::load('repeat'));
 
     // One string where the list goes: typed data wraps it into a list of
@@ -378,10 +380,10 @@ class NodeTypeToolComparisonTest extends DataSurfaceKernelTestBase {
     $result = $this->runSurfaceTool($this->contentType('business_max') + $this->extras($this->deadline(22, $business_days), NULL));
     $this->assertTrue($result->isSuccess(), (string) $result->getMessage());
     $this->assertSame(NodeTypeReviewSettings::DEADLINE_MAX, $this->stored('business_max')[NodeTypeReviewSettings::DEADLINE] ?? NULL);
-    $path = 'third_party_settings.' . self::EXTRAS . '.' . NodeTypeReviewSettings::DEADLINE . '.' . NodeTypeReviewSettings::AMOUNT;
     $result = $this->runSurfaceTool($this->contentType('business_late') + $this->extras($this->deadline(23, $business_days), NULL));
     $this->assertFalse($result->isSuccess());
-    $this->assertStringContainsString($path . ': ', (string) $result->getMessage());
+    $this->assertStringContainsString('(property ' . NodeTypeReviewSettings::DEADLINE . ')', (string) $result->getMessage());
+    $this->assertStringContainsString('23 business_days is outside that', (string) $result->getMessage());
     $this->assertNull(NodeType::load('business_late'));
     $form_state = $this->submitClassicForm('business_person_max', '22', $business_days, '');
     $this->assertSame([], $form_state->getErrors());

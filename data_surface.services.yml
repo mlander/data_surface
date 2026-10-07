@@ -1,7 +1,9 @@
 services:
   data_surface.factory:
     class: Drupal\data_surface\DataSurfaceFactory
-    arguments: ['@event_dispatcher']
+    arguments: ['@event_dispatcher', '@class_resolver']
+    tags:
+      - { name: service_id_collector, tag: data_surface.surface_resolver }
   Drupal\data_surface\DataSurfaceFactoryInterface: '@data_surface.factory'
   data_surface.awareness:
     class: Drupal\data_surface\DataSurfaceAwareness

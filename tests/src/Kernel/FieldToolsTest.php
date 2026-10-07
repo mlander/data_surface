@@ -482,6 +482,57 @@ class FieldToolsTest extends DataSurfaceKernelTestBase {
   }
 
   /**
+   * Tests that both tools are built from the field instance surface.
+   *
+   * The settings are the field type's own surface, mounted by address:
+   * the field config id names the field, the field names its type, and
+   * the type answers. Nothing about the shape is decided by a value.
+   */
+  public function testToolsAreBuiltFromTheFieldInstanceSurface(): void {
+    $provider = $this->container->get('data_surface_tool.field_instance_provider');
+    $surface = $provider->getDataSurface('add', 'entity_test.entity_test.field_address');
+    $entry = $surface->getDefinitions()->entry('settings');
+
+    $this->assertSame(['settings'], $surface->getDefinitions()->names());
+    $this->assertSame(
+      'field_type:address/field_settings/entity_test.entity_test.field_address',
+      (string) $entry?->mount?->coordinate,
+    );
+    $this->assertSame(
+      ['available_countries', 'langcode_override', 'field_overrides'],
+      array_keys($entry->definition->getPropertyDefinitions()),
+    );
+    // The settings input is that mount, converted, and nothing else.
+    $settings = $this->createTool('data_surface:field_add')->getInputDefinition('settings');
+    $this->assertInstanceOf(MapInputDefinition::class, $settings);
+    $this->assertInstanceOf(MapDataDefinition::class, $entry->definition);
+    $this->assertSame(
+      array_keys($entry->definition->getPropertyDefinitions()),
+      array_keys($settings->getPropertyDefinitions()),
+    );
+
+    // The operation has to fit the field: an instance that does not
+    // exist yet is added, not edited.
+    try {
+      $provider->getDataSurface('edit', 'entity_test.entity_test.field_address');
+      $this->fail('An unsaved field was edited.');
+    }
+    catch (\InvalidArgumentException) {
+      // Expected.
+    }
+    $this->addField();
+    $edit = $provider->getDataSurface('edit', 'entity_test.entity_test.field_address');
+    $this->assertNotNull($edit->getDefinitions()->entry('settings')?->mount);
+
+    // A refusal inside the settings is reported on its full path.
+    $update = $this->createTool('data_surface:field_update');
+    $update->setInputValue('settings', ['available_countries' => ['US'], 'field_overrides' => ['nickname' => 'hidden']]);
+    $update->execute();
+    $this->assertFalse($update->getResult()->isSuccess());
+    $this->assertStringContainsString('settings.field_overrides.nickname', (string) $update->getResultMessage());
+  }
+
+  /**
    * Asks a tool's own access check, bypassing input validation.
    *
    * @param string $id

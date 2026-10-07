@@ -146,7 +146,8 @@ class RefinementDiscardTest extends DataSurfaceKernelTestBase {
         'bundle' => 'user',
         'field' => '',
         'limit' => '10',
-        'show_summary' => '1',
+        'presentation' => 'list',
+        'presentation_settings' => ['show_summary' => '1'],
       ],
       '_triggering_element_name' => 'surface[entity_type]',
     ]);
@@ -180,6 +181,83 @@ class RefinementDiscardTest extends DataSurfaceKernelTestBase {
     $this->assertSame('node', $form['surface']['entity_type']['#value']);
     // What the person typed elsewhere is still in front of them.
     $this->assertSame('Featured content', $form['surface']['headline']['#value']);
+  }
+
+  /**
+   * Tests that changing a discriminator swaps its slot over the rebuild.
+   *
+   * The slot is the other shape of "it depends": not a narrower list of
+   * values but a different set of keys. The browser sends back the list
+   * presentation's settings while asking for a grid, because that is
+   * what was on the screen; the rebuild withdraws them as orphaned by the
+   * same rule that withdraws an orphaned bundle, and the slot comes back
+   * as the grid, starting from the grid's own defaults.
+   */
+  public function testChangingThePresentationSwapsTheSlot(): void {
+    $request = Request::create('/demo', 'POST');
+    $request->setSession(new Session(new MockArraySessionStorage()));
+    $this->container->get('request_stack')->push($request);
+
+    $form_state = new FormState();
+    $form_state->setUserInput([
+      'form_id' => 'data_surface_demo_form',
+      'surface' => [
+        'headline' => 'Featured content',
+        'entity_type' => 'user',
+        'bundle' => '',
+        'field' => '',
+        'limit' => '10',
+        // Changed: the slot's shape depends on it.
+        'presentation' => 'grid',
+        // What the list was showing a moment ago.
+        'presentation_settings' => ['show_summary' => '1'],
+      ],
+      '_triggering_element_name' => 'surface[presentation]',
+    ]);
+    $form = $this->container->get('form_builder')
+      ->buildForm('Drupal\data_surface_demo\Form\DataSurfaceDemoForm', $form_state);
+
+    // Touching the discriminator judged nothing else.
+    $this->assertSame(
+      [['surface', 'presentation']],
+      $form_state->getTriggeringElement()['#limit_validation_errors'],
+    );
+    $this->assertSame([], $form_state->getErrors());
+    $this->assertTrue($form_state->isRebuilding());
+
+    // The slot is the grid now, and only the grid.
+    $settings = $form['surface']['presentation_settings'];
+    $this->assertSame('details', $settings['#type']);
+    $this->assertArrayHasKey('columns', $settings);
+    $this->assertArrayNotHasKey('show_summary', $settings);
+    $this->assertSame('3', (string) $settings['columns']['#value']);
+    // The list's input was withdrawn from the raw input as well, or Form
+    // API would have read it back into the rebuilt slot.
+    $this->assertArrayNotHasKey('presentation_settings', $form_state->getUserInput()['surface']);
+    $this->assertSame('grid', $form['surface']['presentation']['#value']);
+  }
+
+  /**
+   * Tests that a slot's input survives a rebuild that keeps its variant.
+   */
+  public function testSlotInputForTheChosenVariantIsKept(): void {
+    $surface = $this->container->get('plugin.manager.block')
+      ->createInstance('data_surface_demo')
+      ->getDataSurface();
+    $stored = ['presentation' => 'grid', 'presentation_settings' => ['columns' => 3]];
+
+    // Still a grid: the columns typed a moment ago stand.
+    $this->assertSame([], $this->formBuilder()->discardedRefinementInput(
+      $surface,
+      $stored,
+      ['presentation' => 'grid', 'presentation_settings' => ['columns' => '5']],
+    ));
+    // A list now: the grid's columns answered a question that is gone.
+    $this->assertSame(['presentation_settings'], $this->formBuilder()->discardedRefinementInput(
+      $surface,
+      $stored,
+      ['presentation' => 'list', 'presentation_settings' => ['columns' => '5']],
+    ));
   }
 
   /**

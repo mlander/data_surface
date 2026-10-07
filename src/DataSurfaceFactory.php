@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Drupal\data_surface;
 
+use Drupal\Core\DependencyInjection\ClassResolverInterface;
 use Drupal\data_surface\Event\DataSurfaceBuildEvent;
 use Symfony\Contracts\EventDispatcher\EventDispatcherInterface;
 
@@ -33,9 +34,20 @@ final class DataSurfaceFactory implements DataSurfaceFactoryInterface {
    * @param \Symfony\Contracts\EventDispatcher\EventDispatcherInterface $eventDispatcher
    *   The event dispatcher, which offers the builder to subscribers
    *   while it is still mutable.
+   * @param \Drupal\Core\DependencyInjection\ClassResolverInterface|null $classResolver
+   *   The class resolver, which instantiates a surface resolver the
+   *   first time a coordinate needs one. NULL where no coordinate will
+   *   ever be resolved.
+   * @param string[] $resolverIds
+   *   The service ids of the surface resolvers, highest priority first,
+   *   collected from the `data_surface.surface_resolver` tag. Ids rather
+   *   than services, because a resolver usually reaches a provider that
+   *   builds through this very factory.
    */
   public function __construct(
     protected readonly EventDispatcherInterface $eventDispatcher,
+    protected readonly ?ClassResolverInterface $classResolver = NULL,
+    protected readonly array $resolverIds = [],
   ) {
   }
 
@@ -50,7 +62,26 @@ final class DataSurfaceFactory implements DataSurfaceFactoryInterface {
       ));
     }
     $this->eventDispatcher->dispatch(new DataSurfaceBuildEvent($builder, $host_class, $host_id));
-    return $builder->seal();
+    return $builder->seal($this);
+  }
+
+  /**
+   * {@inheritdoc}
+   */
+  public function resolve(DataSurfaceCoordinate $coordinate): DataSurfaceInterface {
+    if ($this->classResolver !== NULL) {
+      foreach ($this->resolverIds as $id) {
+        $resolver = $this->classResolver->getInstanceFromDefinition($id);
+        if ($resolver instanceof DataSurfaceResolverInterface && $resolver->applies($coordinate)) {
+          return $resolver->resolve($coordinate);
+        }
+      }
+    }
+    throw new \InvalidArgumentException(sprintf(
+      'No surface resolver answers for %s: a module serving the "%s" host type registers a service tagged data_surface.surface_resolver.',
+      $coordinate,
+      $coordinate->hostType(),
+    ));
   }
 
 }

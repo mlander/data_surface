@@ -27,6 +27,7 @@ nav:
   - Home: index.md
   - Installation: installation.md
   - Declaring a surface: declaring-a-surface.md
+  - Nesting: nesting.md
   - Values:
       - The pipeline: pipeline.md
       - Value semantics: semantics.md

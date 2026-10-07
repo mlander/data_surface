@@ -42,6 +42,7 @@ it](https://www.drupal.org/project/drupal/issues/3622144).
 | **Widget** | Maps one definition to a form element and back. A plugin type. | `Widget\DataSurfaceWidgetInterface`, `Plugin/DataSurfaceWidget/*` |
 | **Options resolver** | Reads one validation constraint as the list of values it allows, with labels and cacheability. A plugin type. | `Options\DataSurfaceOptionsResolverInterface`, `Plugin/DataSurfaceOptionsResolver/*` |
 | **Refiner** | Returns a narrower definition for one key, given what its dependencies hold. | `DataSurfaceRefinerInterface`, and `DataSurfaceFilterInterface` for policy filters |
+| **Mount and slot** | A whole child surface at a key, known from its address; or one of a declared set of child surfaces, chosen by a sibling key. Shape is declared statically, never by refinement. | `DataSurfaceBuilderInterface::mount()` and `mountVariants()`, `SurfaceMount`, `SurfaceSlot`, `DataSurfaceCoordinate` |
 | **Host** | The thing whose values a surface describes: a block, a formatter, a condition, an action, a field type, a standalone form. | `Form\*` traits and the `Plugin/*Base` classes |
 | **Provider** | A class that answers with a surface, and with the target it writes to, for a given operation. | `DataSurfaceProviderInterface`, `Form\FieldSurfaceProviderInterface` |
 | **Declaration** | The one home for what a class's surface holds: a static method handed a builder, readable without an instance, which is what the static host defaults protocols need. | `DataSurfaceDeclarationInterface::declareDataSurface()` |
@@ -84,6 +85,9 @@ means constructing an object graph by hand.
 
 - **Adopting a surface on a plugin you own**: [Declaring a
   surface](declaring-a-surface.md), then [Generated forms](forms.md).
+- **A value whose shape depends on something**: [Nesting](nesting.md),
+  for mounts and slots and the rule that shape is declared, not
+  refined.
 - **Understanding what a value will become**: [The
   pipeline](pipeline.md) for the stages, [Value
   semantics](semantics.md) for the rules each stage applies.

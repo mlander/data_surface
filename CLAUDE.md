@@ -22,7 +22,7 @@ ddev exec bash -c 'cd /var/www/html/web && SIMPLETEST_DB=mysql://db:db@db/db \
   modules/custom/data_surface'
 ```
 
-The baseline as of this writing: **573 tests, 3129 assertions, 0 errors,
+The baseline as of this writing: **603 tests, 3332 assertions, 0 errors,
 2 failures**. The test and assertion counts drift upward as work lands
 and are not the thing to check. **No test may error, and the only tests
 that may fail are the ones in `DataSurfaceRefinementTest`**, for a reason
@@ -45,6 +45,14 @@ the project-level `web/core/phpunit.xml` and its bootstrap at the site
 root (`phpunit-bootstrap.php`) made possible; delete those two files and
 the old `node_make_sticky_action` install failure comes back, hiding
 these tests again. Any error, or any other failure, is a real regression.
+
+The Tool API moves underneath the two comparison tests. Its normalizer
+now lists `null` in the enum of an optional value, and it validates a
+whole tool input, list constraints included, before the tool runs and in
+its own path spelling, so `NodeTypeToolComparisonTest` asserts on the
+Tool API's refusal there and both `COMPARISON.md` files carry it. When
+the drift test fails after a Tool API update, regenerate and read the
+diff before believing it is ours.
 
 `scripts/check.sh` runs the suite and all three gates below in order,
 enforces that rule, and stops at the first failure.
@@ -79,6 +87,11 @@ npx --yes cspell@8 --config /tmp/merged.json --no-progress --no-summary "**"
   runtime in `getDataSurface()`. Never half of each.
 - Refiners narrow a definition, contributors widen the surface at build
   time, filters remove keys. Those are three different jobs; do not blur.
+- Shape is declared, values are refined. A key whose shape depends on
+  something is a mount (`mount()`, by coordinate when it is another
+  host's surface) or a slot (`mountVariants()`), never a refiner swapping
+  a map in: the narrowing check refuses a map that gains or loses a
+  property. See `docs/nesting.md`.
 - Requiredness appears only when it says something: `setRequired(TRUE)` on
   the keys that must be configured, nothing at all on the rest, because
   core data definitions are optional by default.

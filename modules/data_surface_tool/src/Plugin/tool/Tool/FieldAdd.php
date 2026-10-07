@@ -82,7 +82,7 @@ use Symfony\Component\DependencyInjection\ContainerInterface;
     ),
     'settings' => new MapInputDefinition(
       label: new TranslatableMarkup('Field settings'),
-      description: new TranslatableMarkup('Field instance settings, not storage settings. Once the entity type, bundle and field name are known this is replaced by the settings the field type describes, or by its config schema when it describes none.'),
+      description: new TranslatableMarkup('Field instance settings, not storage settings. Their shape is decided by the field type, so it is known once the entity type, bundle and field name name the field: then this is the settings the field type describes, or its config schema when it describes none.'),
       required: FALSE,
       default_value: [],
     ),
@@ -127,7 +127,7 @@ class FieldAdd extends ToolBase implements InputDefinitionRefinerInterface {
     $instance->entityDisplayRepository = $container->get('entity_display.repository');
     $instance->fieldTypePluginManager = $container->get('plugin.manager.field.field_type');
     $instance->typedConfigManager = $container->get('config.typed');
-    $instance->surfaceLocator = $container->get('data_surface_tool.field_surface_locator');
+    $instance->fieldInstances = $container->get('data_surface_tool.field_instance_provider');
     $instance->surfaceInputDefinitions = $container->get('data_surface_tool.input_definitions');
     $instance->pipeline = $container->get('data_surface.pipeline');
     return $instance;
@@ -187,18 +187,17 @@ class FieldAdd extends ToolBase implements InputDefinitionRefinerInterface {
     }
     $field = FieldConfig::create($field_values);
 
-    $surface = $this->surfaceLocator->surfaceFor($field);
-    $target = $surface === NULL ? NULL : $this->surfaceLocator->targetFor($field);
+    $surface = $this->fieldInstances->surfaceFor($field);
     // What the run asks the caller to re-choose, as opposed to what it
     // refused: empty on every ordinary save, and left out of the result
     // when it is.
     $stale = [];
-    if ($surface !== NULL && $target !== NULL) {
+    if ($surface !== NULL) {
       // One call does the whole of it: the surface says what the values
       // may be, the target says what they are stored as, and the commit
       // is the field's own save, so an invalid payload leaves no field
       // behind.
-      $result = $this->pipeline->submit($surface, is_array($settings) ? $settings : [], $target, access: $access);
+      $result = $this->submitSettings($surface, $field, $settings, $access);
       if (!$result->isValid()) {
         return ExecutableResult::failure($this->t('The settings for field @field were refused: @violations', [
           '@field' => $field_name,

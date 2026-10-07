@@ -84,6 +84,24 @@ final class DataSurfaceBuilder implements DataSurfaceBuilderInterface {
   protected array $filters = [];
 
   /**
+   * Children mounted at a key, keyed by surface key, as declared.
+   *
+   * Kept as the author handed them over, a sealed surface, a coordinate
+   * or a declaration callable, and resolved at seal: a coordinate is
+   * turned into a surface by the factory, which only seal() is handed.
+   *
+   * @var array<string, \Drupal\data_surface\DataSurfaceInterface|\Drupal\data_surface\DataSurfaceCoordinate|callable>
+   */
+  protected array $mounts = [];
+
+  /**
+   * Slots, keyed by surface key: the discriminator and the variants.
+   *
+   * @var array<string, array{by: string, variants: array<string, \Drupal\data_surface\DataSurfaceInterface|\Drupal\data_surface\DataSurfaceCoordinate|callable>}>
+   */
+  protected array $slots = [];
+
+  /**
    * Locked surface keys.
    *
    * @var string[]
@@ -262,6 +280,71 @@ final class DataSurfaceBuilder implements DataSurfaceBuilderInterface {
   /**
    * {@inheritdoc}
    */
+  public function mount(string $key, DataSurfaceInterface|DataSurfaceCoordinate|callable $child): static {
+    $this->assertMutable();
+    $this->assertNotNested($key);
+    $this->definitions[$key] = $this->shellFor($key);
+    $this->mounts[$key] = $child;
+    return $this;
+  }
+
+  /**
+   * {@inheritdoc}
+   */
+  public function mountVariants(string $key, string $by, array $variants): static {
+    $this->assertMutable();
+    $this->assertNotNested($key);
+    if ($variants === []) {
+      throw new \InvalidArgumentException(sprintf('The "%s" slot declares no variants: a slot is one shape out of a declared set, and an empty set is no shape at all.', $key));
+    }
+    if ($by === $key) {
+      throw new \InvalidArgumentException(sprintf('The "%s" slot cannot choose its own variant: the discriminator is a sibling key.', $key));
+    }
+    foreach ($variants as $id => $child) {
+      if (!static::isChild($child)) {
+        throw new \InvalidArgumentException(sprintf(
+          'The "%s" variant of the "%s" slot is a %s; a variant is a sealed surface, a coordinate, or a callable that declares one into a builder.',
+          $id,
+          $key,
+          get_debug_type($child),
+        ));
+      }
+    }
+    $discriminator = $this->named($by);
+    if ($discriminator instanceof ListDataDefinitionInterface || $discriminator instanceof ComplexDataDefinitionInterface) {
+      throw new \InvalidArgumentException(sprintf('The "%s" slot is chosen by "%s", which is a %s: a discriminator holds one value.', $key, $by, $discriminator->getDataType()));
+    }
+    $ids = array_map('strval', array_keys($variants));
+    $set = ChoiceSet::of($discriminator);
+    if ($set === NULL) {
+      // The complete set of allowed values is part of what the slot
+      // advertises, so the discriminator says it in its own vocabulary.
+      $discriminator->addConstraint('Choice', ['choices' => $ids]);
+    }
+    else {
+      // Narrowed, never widened: a value the discriminator never allowed
+      // would be a variant nobody can choose, and declaring one is a
+      // mistake worth hearing about now.
+      $unoffered = array_diff($ids, array_map('strval', $set->values));
+      if ($unoffered !== []) {
+        throw new \LogicException(sprintf(
+          'The "%s" slot declares the %s variants, which "%s" does not allow: a variant its discriminator cannot choose would never be reached.',
+          $key,
+          implode(', ', $unoffered),
+          $by,
+        ));
+      }
+      $set->withValues(array_values(array_intersect(array_map('strval', $set->values), $ids)))->applyTo($discriminator);
+    }
+    $this->definitions[$key] = $this->shellFor($key);
+    $this->slots[$key] = ['by' => $by, 'variants' => $variants];
+    $this->refinements[$key] = array_values(array_unique(array_merge($this->refinements[$key] ?? [], [$by])));
+    return $this;
+  }
+
+  /**
+   * {@inheritdoc}
+   */
   public function getOutputDefinition(string $name): ?DataDefinitionInterface {
     return $this->outputs[$name] ?? NULL;
   }
@@ -360,11 +443,12 @@ final class DataSurfaceBuilder implements DataSurfaceBuilderInterface {
   /**
    * {@inheritdoc}
    */
-  public function seal(): DataSurfaceInterface {
+  public function seal(?DataSurfaceFactoryInterface $factory = NULL): DataSurfaceInterface {
     if ($this->sealed !== NULL) {
       return $this->sealed;
     }
     $this->assertNoRefinementCycle();
+    [$mounts, $slots] = $this->resolveNested($factory);
     $unmounted = array_diff_key($this->thirdPartyShapes, $this->thirdParty);
     if ($unmounted !== []) {
       throw new \LogicException(sprintf(
@@ -373,6 +457,12 @@ final class DataSurfaceBuilder implements DataSurfaceBuilderInterface {
       ));
     }
     $definitions = $this->definitions;
+    foreach ($mounts as $key => $mount) {
+      $definitions[$key] = SurfaceMount::fill($this->assertShell((string) $key), $mount->child->getDefinitions());
+    }
+    foreach ($slots as $key => $slot) {
+      $definitions[$key] = $slot->placeholder();
+    }
     if ($this->thirdParty !== []) {
       $definitions['third_party_settings'] = $this->mountedMap($this->thirdParty, FALSE);
     }
@@ -393,6 +483,8 @@ final class DataSurfaceBuilder implements DataSurfaceBuilderInterface {
         locked: $this->locked,
         refiners: $this->refiners,
         contributions: $this->contributions,
+        mounts: $mounts,
+        slots: $slots,
       ),
       $this->refiner,
       $this->filters,
@@ -443,12 +535,192 @@ final class DataSurfaceBuilder implements DataSurfaceBuilderInterface {
         ->setLabel($emitted
           ? new TranslatableMarkup('@provider outputs', ['@provider' => $name])
           : new TranslatableMarkup('@provider settings', ['@provider' => $name]));
-      foreach ($keys as $key => $definition) {
-        $provider_map->setPropertyDefinition((string) $key, $definition);
-      }
-      $providers->setPropertyDefinition((string) $provider, $provider_map);
+      $providers->setPropertyDefinition((string) $provider, SurfaceMount::fill($provider_map, $keys));
     }
     return $providers;
+  }
+
+  /**
+   * Turns every declared mount and slot into sealed children.
+   *
+   * Asked at seal and not before, for the same reason the cycle check
+   * is: the build event may still add to the parent, and a coordinate can
+   * only be resolved by the factory, which hands itself to seal(). The
+   * children's cacheability becomes the parent's here, because whatever
+   * a child's shape was read from is something the parent's shape was
+   * read from too.
+   *
+   * @param \Drupal\data_surface\DataSurfaceFactoryInterface|null $factory
+   *   The factory sealing this builder, or NULL when it is being sealed
+   *   by hand.
+   *
+   * @return array{0: array<string, \Drupal\data_surface\SurfaceMount>, 1: array<string, \Drupal\data_surface\SurfaceSlot>}
+   *   The mounts and the slots, keyed by surface key.
+   *
+   * @throws \LogicException
+   *   When a shell was given properties, a discriminator no longer
+   *   offers exactly the variants, or a coordinate needs a factory.
+   */
+  protected function resolveNested(?DataSurfaceFactoryInterface $factory): array {
+    $mounts = [];
+    foreach ($this->mounts as $key => $child) {
+      $key = (string) $key;
+      $this->assertShell($key);
+      $mounts[$key] = $this->resolveChild($key, $child, $factory);
+    }
+    $slots = [];
+    foreach ($this->slots as $key => ['by' => $by, 'variants' => $variants]) {
+      $key = (string) $key;
+      $shell = $this->assertShell($key);
+      $set = ChoiceSet::of($this->named($by));
+      $offered = $set === NULL ? [] : array_map('strval', $set->values);
+      $ids = array_map('strval', array_keys($variants));
+      sort($offered);
+      sort($ids);
+      if ($offered !== $ids) {
+        throw new \LogicException(sprintf(
+          'The "%s" slot is chosen by "%s", which now allows %s while the slot declares the variants %s: every value the discriminator allows needs a variant, and every variant a value that chooses it.',
+          $key,
+          $by,
+          $offered === [] ? 'anything' : implode(', ', $offered),
+          implode(', ', $ids),
+        ));
+      }
+      $resolved = [];
+      foreach ($variants as $id => $child) {
+        $resolved[(string) $id] = $this->resolveChild($key . '[' . $id . ']', $child, $factory);
+      }
+      $slots[$key] = new SurfaceSlot($by, $shell, $resolved);
+    }
+    return [$mounts, $slots];
+  }
+
+  /**
+   * Seals one declared child.
+   *
+   * @param string $key
+   *   Where it is mounted, for messages.
+   * @param \Drupal\data_surface\DataSurfaceInterface|\Drupal\data_surface\DataSurfaceCoordinate|callable $child
+   *   The child as declared.
+   * @param \Drupal\data_surface\DataSurfaceFactoryInterface|null $factory
+   *   The factory sealing the parent, if there is one.
+   *
+   * @return \Drupal\data_surface\SurfaceMount
+   *   The sealed child, with its address when it had one.
+   *
+   * @throws \LogicException
+   *   When a coordinate is to be resolved with no factory to do it.
+   */
+  protected function resolveChild(string $key, DataSurfaceInterface|DataSurfaceCoordinate|callable $child, ?DataSurfaceFactoryInterface $factory): SurfaceMount {
+    if ($child instanceof DataSurfaceInterface) {
+      $mount = new SurfaceMount($child);
+    }
+    elseif ($child instanceof DataSurfaceCoordinate) {
+      if ($factory === NULL) {
+        throw new \LogicException(sprintf(
+          'The child mounted at "%s" is named by its coordinate %s, and only the factory resolves a coordinate: build this surface through DataSurfaceFactoryInterface::build() rather than sealing it by hand.',
+          $key,
+          $child,
+        ));
+      }
+      $mount = new SurfaceMount($factory->resolve($child), $child);
+    }
+    else {
+      // An inline child is part of its parent's declaration: it is said
+      // into a builder of its own so that it is a whole surface, and it
+      // binds no refiner, because nothing in a parent may answer under a
+      // child's names.
+      $builder = new self();
+      $child($builder);
+      $mount = new SurfaceMount($builder->seal($factory));
+    }
+    $this->cacheability->addCacheableDependency($mount->child);
+    return $mount;
+  }
+
+  /**
+   * Gets the map describing a mount or slot key, before it is filled.
+   *
+   * A key may be described before it is mounted, with an empty map
+   * carrying its label and description, and that map is kept; otherwise
+   * a bare one is made.
+   *
+   * @param string $key
+   *   The surface key.
+   *
+   * @return \Drupal\Core\TypedData\MapDataDefinition
+   *   The shell.
+   *
+   * @throws \InvalidArgumentException
+   *   When the key already holds anything but an empty map.
+   */
+  protected function shellFor(string $key): MapDataDefinition {
+    $existing = $this->definitions[$key] ?? NULL;
+    if ($existing === NULL) {
+      return MapDataDefinition::create();
+    }
+    if (!$existing instanceof MapDataDefinition || $existing->getPropertyDefinitions() !== []) {
+      throw new \InvalidArgumentException(sprintf(
+        'The "%s" key already holds a %s definition. A mounted child is the whole of what the key holds; describe the key beforehand with an empty map, if at all.',
+        $key,
+        $existing->getDataType(),
+      ));
+    }
+    return $existing;
+  }
+
+  /**
+   * Checks that a mount or slot key still holds an empty map at seal.
+   *
+   * @param string $key
+   *   The surface key.
+   *
+   * @return \Drupal\Core\TypedData\MapDataDefinition
+   *   The shell.
+   *
+   * @throws \LogicException
+   *   When something replaced the shell or gave it properties.
+   */
+  protected function assertShell(string $key): MapDataDefinition {
+    $shell = $this->definitions[$key] ?? NULL;
+    if (!$shell instanceof MapDataDefinition || $shell->getPropertyDefinitions() !== []) {
+      throw new \LogicException(sprintf(
+        'The "%s" key is a mount, so what it holds is its child\'s to say: its definition was replaced or given properties of its own after it was mounted.',
+        $key,
+      ));
+    }
+    return $shell;
+  }
+
+  /**
+   * Answers whether a value can be mounted.
+   *
+   * Asked of each variant, because an array's members are not typed the
+   * way mount()'s parameter is.
+   *
+   * @param mixed $child
+   *   The value.
+   *
+   * @return bool
+   *   TRUE for a sealed surface, a coordinate or a declaration callable.
+   */
+  protected static function isChild(mixed $child): bool {
+    return $child instanceof DataSurfaceInterface || $child instanceof DataSurfaceCoordinate || is_callable($child);
+  }
+
+  /**
+   * Refuses to mount a key twice.
+   *
+   * @param string $key
+   *   The surface key.
+   *
+   * @throws \LogicException
+   *   When the key is already a mount or a slot.
+   */
+  protected function assertNotNested(string $key): void {
+    if (isset($this->mounts[$key]) || isset($this->slots[$key])) {
+      throw new \LogicException(sprintf('The "%s" key is already a mount: one key holds one child, or one set of variants.', $key));
+    }
   }
 
   /**

@@ -171,12 +171,24 @@ refused refinement.
 | Dropping a choice constraint's list of values | **refused** |
 | Adding values to a list of allowed values | **refused** |
 | Replacing the options of any other constraint | **refused** |
+| Adding or removing a map property | **refused** |
+| Any change above, inside a map property or a list item | judged by the same row |
 
-The last row is where the conservatism lives: two `Regex` patterns
-cannot be compared for containment, so replacing one is refused rather
-than guessed at. A refiner that needs a different pattern advertises the
-narrower one in the first place. For `Length` and `Range` only `min` and
-`max` are compared, because the rest of their options are messages.
+The map rows are the shape-versus-values rule enforced: a refined map
+holds exactly the properties it was handed, so a refiner cannot make a
+key appear or disappear, and every property is checked recursively, as
+is a list's item definition. The one way a shape may appear during
+refinement is out of `any`, which advertised nothing to contradict — the
+placeholder of a slot resolving to the variant its discriminator chose,
+which was declared before anything was chosen. A shape that depends on
+another key is declared that way; see [Nesting](nesting.md).
+
+Replacing another constraint's options is where the conservatism lives:
+two `Regex` patterns cannot be compared for containment, so replacing
+one is refused rather than guessed at. A refiner that needs a different
+pattern advertises the narrower one in the first place. For `Length` and
+`Range` only `min` and `max` are compared, because the rest of their
+options are messages.
 
 A refusal is a `\LogicException` naming the key, the contributor and
 what widened:
@@ -292,10 +304,11 @@ every narrowing of it — but putting `sash` back throws.
 
 ## Where this does not reach yet
 
-- **Nested keys.** The narrowing check reads a definition's own
-  constraints. A refiner that tightens a property inside a map is
-  cloned safely and its work is kept, but the check does not descend
-  into it. Dotted refinement paths (decision D6) are where that lands.
+- **Refining into a child.** The narrowing check descends into maps and
+  lists, and a mounted child refines in its own frame (see
+  [Nesting](nesting.md)), but a parent cannot register a refiner for a
+  path inside a child, by design: dotted refinement paths (decision D6)
+  are addressing, not dispatch.
 - **Contributed keys.** A contributor can add a value to an existing key
   and can mount a key under its own namespace, but it cannot yet
   register a refiner for the key it mounted, because addressing

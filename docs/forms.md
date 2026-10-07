@@ -302,6 +302,14 @@ resolves an element's `#value` from the input before it ever looks at
 `#default_value`. An input left in place would put the orphaned value
 straight back into the rebuilt select.
 
+A **slot** is a refinement target too, and the same rule covers it with
+a different test: its input stands while every key it carries belongs to
+the variant now chosen. Changing the discriminator from list to grid
+sends back the list's settings, which answered a question no longer on
+the form, so they are dropped and the slot is rebuilt as the grid,
+starting from the grid's defaults. A slot whose discriminator holds
+nothing is not rendered at all. See [Nesting](nesting.md).
+
 ## Stale values on a form
 
 A select whose stored value is no longer among the options it offers —

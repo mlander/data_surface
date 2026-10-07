@@ -182,10 +182,11 @@ Full documentation is under [`docs/`](docs/).
 | [Home](docs/index.md) | What a surface is, and where each concept lives in the code. |
 | [Installation](docs/installation.md) | Install, integrations, submodules. |
 | [Declaring a surface](docs/declaring-a-surface.md) | Attribute versus runtime, defaults, locking, required. |
+| [Nesting](docs/nesting.md) | Mounts and slots: shape is declared, values are refined. |
 | [The pipeline](docs/pipeline.md) | Access, accept, validate, prepare, commit; dry runs; exceptions. |
 | [Value semantics](docs/semantics.md) | Configured or not, the casting table, shape mismatches. |
 | [Outputs](docs/outputs.md) | Declaring what a host emits, the Omitted sentinel, conformance. |
-| [Targets](docs/targets.md) | The seven shipped targets and the serialization rule. |
+| [Targets](docs/targets.md) | The eight shipped targets and the serialization rule. |
 | [Generated forms](docs/forms.md) | Host families, the generic provider form and its cosmetic seam, the merge rule, AJAX, extraction. |
 | [Widgets](docs/widgets.md) | The widget plugin type, and writing one. |
 | [Options and resolvers](docs/options.md) | `LabeledChoice`, the resolver plugin type, the stock resolvers. |
