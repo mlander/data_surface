@@ -11,24 +11,25 @@ use Drupal\data_surface\Surface\ShapeInterface;
 use Drupal\data_surface\Surface\SurfaceInterface;
 
 /**
- * Has a refiner watching a key its shape never declares.
+ * Has a #[RefinesInput] method that is an instance method.
  */
-#[Surface('surface_test.broken.watches_undeclared')]
-final class WatchesUndeclaredSurface implements SurfaceInterface {
+#[Surface('surface_test.broken.instance_refiner')]
+final class InstanceRefinerSurface implements SurfaceInterface {
 
   /**
    * {@inheritdoc}
    */
   public static function defineInputs(ShapeInterface $inputs): void {
+    $inputs->add('kind', 'string', 'Kind');
     $inputs->add('name', 'string', 'Name');
   }
 
   /**
-   * Watches a sibling that is not there.
+   * Not static, which a surface's refiner has to be.
    */
   #[RefinesInput('name')]
-  public static function nameOfGhost(DataDefinitionInterface $name, string $ghost): DataDefinitionInterface {
-    return $name;
+  public function nameOfKind(DataDefinitionInterface $name, string $kind): DataDefinitionInterface {
+    return $name->addConstraint('Length', ['max' => 10]);
   }
 
 }
