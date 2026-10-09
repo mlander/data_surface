@@ -67,12 +67,12 @@
                 "type": "string",
                 "oneOf": [
                     {
-                        "const": "riverside_main",
-                        "title": "Main hall"
+                        "const": "library_reading",
+                        "title": "Reading room"
                     },
                     {
-                        "const": "riverside_east",
-                        "title": "East room"
+                        "const": "library_garden",
+                        "title": "Garden room"
                     }
                 ],
                 "x-surface": {
@@ -82,22 +82,21 @@
                         "venue"
                     ],
                     "refined": true,
-                    "stale": false,
+                    "stale": true,
                     "emptyOption": {
-                        "show": false,
+                        "show": true,
                         "label": "- Select -"
                     }
                 }
             },
             "capacity": {
                 "title": "Capacity",
-                "description": "Up to 400 for the Main hall.",
                 "type": [
                     "integer",
                     "null"
                 ],
                 "minimum": 1,
-                "maximum": 400,
+                "maximum": 1000,
                 "default": 50,
                 "x-surface": {
                     "widget": "number",
@@ -105,8 +104,9 @@
                     "dependsOn": [
                         "room"
                     ],
-                    "refined": true,
-                    "stale": false
+                    "refined": false,
+                    "stale": false,
+                    "enumerated": true
                 }
             }
         },
@@ -115,14 +115,62 @@
             "title",
             "venue",
             "room"
+        ],
+        "allOf": [
+            {
+                "if": {
+                    "properties": {
+                        "room": {
+                            "const": "library_reading"
+                        }
+                    },
+                    "required": [
+                        "room"
+                    ]
+                },
+                "then": {
+                    "properties": {
+                        "capacity": {
+                            "description": "Up to 60 for the Reading room.",
+                            "maximum": 60
+                        }
+                    }
+                }
+            },
+            {
+                "if": {
+                    "properties": {
+                        "room": {
+                            "const": "library_garden"
+                        }
+                    },
+                    "required": [
+                        "room"
+                    ]
+                },
+                "then": {
+                    "properties": {
+                        "capacity": {
+                            "description": "Up to 30 for the Garden room.",
+                            "maximum": 30
+                        }
+                    }
+                }
+            }
         ]
     },
     "values": {
         "title": "Spring meetup",
         "open": true,
-        "venue": "riverside",
-        "room": "riverside_main",
+        "venue": "library",
+        "room": null,
         "capacity": 50
     },
-    "stale": []
+    "stale": [
+        "room"
+    ],
+    "discarded": [
+        "room",
+        "capacity"
+    ]
 }
