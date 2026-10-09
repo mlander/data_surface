@@ -12,14 +12,19 @@ use Drupal\Core\Ajax\PrependCommand;
 use Drupal\Core\Ajax\RemoveCommand;
 use Drupal\Core\Ajax\ReplaceCommand;
 use Drupal\Core\Cache\CacheableMetadata;
+use Drupal\Core\Form\FormBuilderInterface;
 use Drupal\Core\Form\FormStateInterface;
 use Drupal\Core\Form\OptGroup;
 use Drupal\Core\Form\SubformStateInterface;
+use Drupal\Core\Htmx\Htmx;
 use Drupal\Core\Messenger\MessengerInterface;
 use Drupal\Core\Render\ElementInfoManagerInterface;
+use Drupal\Core\Security\TrustedCallbackInterface;
+use Drupal\Core\Template\Attribute;
 use Drupal\Core\TypedData\ComplexDataDefinitionInterface;
 use Drupal\Core\TypedData\DataDefinitionInterface;
 use Drupal\Core\TypedData\ListDataDefinitionInterface;
+use Drupal\Core\Url;
 use Drupal\data_surface\DataSurfaceInterface;
 use Drupal\data_surface\DefinitionMetadata;
 use Drupal\data_surface\Options\DataSurfaceOptions;
@@ -41,7 +46,7 @@ use Drupal\data_surface\Widget\DataSurfaceWidgetManager;
  * @see \Drupal\data_surface\Form\DataSurfaceFormBuilderInterface
  *   For the documentation of every method.
  */
-class DataSurfaceFormBuilder implements DataSurfaceFormBuilderInterface {
+class DataSurfaceFormBuilder implements DataSurfaceFormBuilderInterface, TrustedCallbackInterface {
 
   /**
    * Render key marking the surface container the AJAX path rebuilds.
@@ -95,6 +100,44 @@ class DataSurfaceFormBuilder implements DataSurfaceFormBuilderInterface {
   protected const GROUPING_TYPES = ['details', 'fieldset', 'container'];
 
   /**
+   * Render key on the container naming its refresh strategy.
+   *
+   * One of the interface's REFRESH_* constants, read by the container's
+   * #process and, under HTMX, by its #pre_render.
+   */
+  protected const STRATEGY_KEY = '#data_surface_refresh_strategy';
+
+  /**
+   * Render key on a rebuilt HTMX trigger whose options the rebuild moved.
+   *
+   * Or whose previous request showed an error: either way the response
+   * replaces it, as the AJAX callback does. Set by the container's
+   * #process on the rebuild, which has the form state; read by its
+   * #pre_render, which marks what the response swaps.
+   */
+  protected const REPLACE_OWN_KEY = '#data_surface_replace_own';
+
+  /**
+   * The container's child holding the messages a refresh printed.
+   *
+   * HTMX only. The AJAX callback prepends its messages to the container;
+   * an out-of-band swap needs an element on the page to land on, so the
+   * HTMX container always renders this one, empty except on a refresh.
+   * In the reserved "@" namespace, which no definition is named in.
+   */
+  protected const MESSAGES_KEY = '@messages';
+
+  /**
+   * Element types a refinement trigger reads on blur rather than change.
+   *
+   * The types core's own #ajax defaults to "blur" for, so the HTMX
+   * strategy asks for a rebuild at the same moment the AJAX one does.
+   *
+   * @see \Drupal\Core\Render\Element\RenderElementBase::preRenderAjaxForm()
+   */
+  protected const BLUR_TYPES = ['password', 'textfield', 'number', 'tel', 'textarea', 'email'];
+
+  /**
    * Constructs a DataSurfaceFormBuilder.
    *
    * @param \Drupal\data_surface\Widget\DataSurfaceWidgetManager $widgetManager
@@ -127,7 +170,7 @@ class DataSurfaceFormBuilder implements DataSurfaceFormBuilderInterface {
   /**
    * {@inheritdoc}
    */
-  public function buildSurfaceForm(DataSurfaceInterface $surface, array $values, FormStateInterface $form_state, string $wrapper_key = 'data-surface'): array {
+  public function buildSurfaceForm(DataSurfaceInterface $surface, array $values, FormStateInterface $form_state, string $wrapper_key = 'data-surface', string $refresh = self::REFRESH_AJAX): array {
     // Two views of one overlay. The surface is refined against the keys
     // as they stand, an orphan held unanswered; each element is rendered
     // with what it holds, an orphan standing for its stored value, so its
@@ -152,6 +195,7 @@ class DataSurfaceFormBuilder implements DataSurfaceFormBuilderInterface {
       '#attributes' => ['id' => $wrapper_id],
       '#process' => $this->surfaceProcess('container'),
       self::WRAPPER_KEY => $wrapper_id,
+      self::STRATEGY_KEY => $refresh,
     ];
     $definitions = $surface->getDefinitions();
     foreach ($definitions as $name => $definition) {
@@ -206,7 +250,7 @@ class DataSurfaceFormBuilder implements DataSurfaceFormBuilderInterface {
       }
       $container[$name] = $element;
     }
-    $container = $this->wireRefinement($container, $surface, $values, [], $wrapper_id);
+    $container = $this->wireRefinement($container, $surface, $values, [], $wrapper_id, $refresh);
     $stale = static::stalePaths($container);
     if ($stale !== []) {
       // Fixed to this build: what the person is looking at now, not what
@@ -818,6 +862,9 @@ class DataSurfaceFormBuilder implements DataSurfaceFormBuilderInterface {
         // from; a rebuild later in the same request is not.
         $state->setTemporaryValue([self::RENDERED_OPTIONS, static::containerKey($element)], static::triggerOptions($element));
       }
+      if (($element[self::STRATEGY_KEY] ?? NULL) === self::REFRESH_HTMX) {
+        static::prepareHtmxRefresh($element, $state);
+      }
       static::wrapRefreshed($element, $wrapper_id);
       if (isset($element[self::STALE_MARKER_KEY]) && !isset($element[self::STALE_MARKER_KEY][self::REFRESH_ID_KEY])) {
         $element[self::STALE_MARKER_KEY] = static::wrapped($element[self::STALE_MARKER_KEY], static::reservedId($wrapper_id, 'stale'));
@@ -844,7 +891,8 @@ class DataSurfaceFormBuilder implements DataSurfaceFormBuilderInterface {
       // is top level.
       $child_tree = (bool) ($element[$key]['#tree'] ?? $tree);
       $child_parents = $element[$key]['#parents'] ?? ($child_tree && $tree ? [...$parents, $key] : [$key]);
-      if (isset($element[$key]['#ajax']) && !isset($element[$key]['#limit_validation_errors'])) {
+      // An HTMX trigger has no #ajax, and is limited all the same.
+      if ((isset($element[$key]['#ajax']) || isset($element[$key][self::TRIGGER_KEY])) && !isset($element[$key]['#limit_validation_errors'])) {
         $element[$key]['#limit_validation_errors'] = [$child_parents];
       }
       static::limitAjax($element[$key], $child_parents, $child_tree);
@@ -1193,7 +1241,24 @@ class DataSurfaceFormBuilder implements DataSurfaceFormBuilderInterface {
    */
   protected static function withTriggerErrors(array $element, FormStateInterface $form_state, string $container_key, string $dotted): array {
     $state = $form_state instanceof SubformStateInterface ? $form_state->getCompleteFormState() : $form_state;
-    $messages = $state->getTemporaryValue([self::TRIGGER_ERRORS, $container_key, $dotted]) ?? [];
+    $held = $state->getTemporaryValue([self::TRIGGER_ERRORS, $container_key, $dotted]) ?? [];
+    return static::inlineTriggerErrors($element, $held);
+  }
+
+  /**
+   * Prints a trigger's errors under it: the half that needs no form state.
+   *
+   * @param array $element
+   *   The trigger.
+   * @param array $messages
+   *   What flagSurfaceErrors() held for it; empty when nothing was held.
+   *
+   * @return array
+   *   The trigger, carrying its errors when it has any.
+   *
+   * @see static::withTriggerErrors()
+   */
+  protected static function inlineTriggerErrors(array $element, array $messages): array {
     $own = $element['#errors'] ?? NULL;
     if ($own !== NULL && $own !== '') {
       // One answer per element, as Form API keeps one: the surface's own
@@ -1230,7 +1295,222 @@ class DataSurfaceFormBuilder implements DataSurfaceFormBuilderInterface {
     if (isset($element['#id'], $element['#attached']['drupalSettings']['ajax'][$element['#id']])) {
       $element['#attached']['drupalSettings']['ajax'][$element['#id']]['submit'][self::INVALID_INPUT] = '1';
     }
+    // The same, for an HTMX trigger: what it posts is in its hx-vals.
+    if (isset($element['#attributes']['data-hx-vals'])) {
+      static::amendHtmxVals($element, [self::INVALID_INPUT => '1']);
+    }
     return $element;
+  }
+
+  /**
+   * Prepares a container served over HTMX for the request in hand.
+   *
+   * Two things on every build. The stale marker and the messages get a
+   * wrapper whether or not they hold anything, because an out-of-band
+   * swap replaces an element the page already has: the AJAX callback
+   * removes the old ones and adds the new, an HTMX response can only put
+   * one element where another was. And a #pre_render, which marks what
+   * the response swaps, once the request has been judged.
+   *
+   * On the rebuild a refinement asked for, which is the only build of a
+   * request that knows its triggering element when the container is
+   * processed, the rebuilt trigger is told what the AJAX callback would
+   * read off the form state: the errors held for it, printed under it,
+   * and whether it is to be replaced because its options moved or its
+   * previous request showed an error.
+   *
+   * @param array $element
+   *   The container, being processed; its wrapper id is final.
+   * @param \Drupal\Core\Form\FormStateInterface $state
+   *   The complete form state.
+   */
+  protected static function prepareHtmxRefresh(array &$element, FormStateInterface $state): void {
+    $wrapper_id = (string) $element[self::WRAPPER_KEY];
+    $element[self::STALE_MARKER_KEY] ??= ['#markup' => ''];
+    if (!isset($element[self::MESSAGES_KEY])) {
+      // First among the children, where the AJAX callback prepends them.
+      $element = [self::MESSAGES_KEY => static::wrapped(['#markup' => ''], static::reservedId($wrapper_id, 'messages'))] + $element;
+    }
+    $element['#pre_render'][] = [static::class, 'preRenderHtmxRefresh'];
+    $trigger = $state->getTriggeringElement() ?? [];
+    $path = $trigger[self::TRIGGER_KEY]['path'] ?? NULL;
+    if (!is_array($path) || $path === [] || array_slice($trigger['#array_parents'] ?? [], 0, -count($path)) !== ($element['#array_parents'] ?? NULL)) {
+      // Not a rebuild a trigger of this container asked for.
+      return;
+    }
+    $own = implode('.', $path);
+    $touched = NestedArray::getValue($element, $path);
+    if (!is_array($touched)) {
+      return;
+    }
+    $touched = static::withTriggerErrors($touched, $state, static::containerKey($element), $own);
+    // Decision: see docs/decisions.md#an-error-on-the-trigger-renders-inline.
+    $rendered = $state->getTemporaryValue([self::RENDERED_OPTIONS, static::containerKey($element), $own]);
+    if (($state->getUserInput()[self::INVALID_INPUT] ?? NULL) === '1'
+      || ($rendered !== NULL && $rendered !== static::optionsSignature($touched))) {
+      $touched[self::REPLACE_OWN_KEY] = TRUE;
+    }
+    NestedArray::setValue($element, $path, $touched);
+  }
+
+  /**
+   * Element #pre_render callback: marks what an HTMX refresh swaps.
+   *
+   * The response to a refinement trigger's HTMX request is the whole
+   * rebuilt form, as core's form builder renders it. This marks, with
+   * `hx-swap-oob`, exactly what the AJAX callback would have replaced:
+   * each dependent by its own wrapper, every element placed with
+   * placeRefreshed(), the stale marker and the messages, and the trigger
+   * itself only when its own value was refused, its previous request
+   * showed an error, or the rebuild moved its options. Everything else
+   * in the response is left where HTMX drops it, since the trigger swaps
+   * nothing itself; core marks the form's build id the same way, so the
+   * next request names the form this one cached.
+   *
+   * At render time rather than in #process, because this is the one
+   * place both cases are seen: a rebuild, and a request Form API's own
+   * element validation stopped before any rebuild — a maximum length on
+   * the trigger — whose error is only on the element by now.
+   *
+   * @param array $element
+   *   The container.
+   *
+   * @return array
+   *   The container, its moved elements marked.
+   */
+  public static function preRenderHtmxRefresh(array $element): array {
+    // @phpstan-ignore globalDrupalDependencyInjection.useDependencyInjection
+    $request = \Drupal::request();
+    $name = $request->request->get('_triggering_element_name');
+    if (!$request->headers->has(FormBuilderInterface::HTMX_REQUEST) || !is_string($name) || $name === '') {
+      return $element;
+    }
+    $path = static::triggerNamed($element, $name);
+    if ($path === NULL) {
+      // A request about another container, or none at all.
+      return $element;
+    }
+    $own = implode('.', $path);
+    $touched = NestedArray::getValue($element, $path);
+    if (!empty($touched['#errors']) && empty($touched[self::INLINE_ERROR_KEY])) {
+      // Form API's own validation refused the trigger, and the rebuild
+      // never ran: the form is the one the request arrived with, and
+      // its error is on the element and in the messages. Said once,
+      // under the trigger, as the AJAX callback says it.
+      $touched = static::inlineTriggerErrors($touched, []);
+      NestedArray::setValue($element, $path, $touched);
+    }
+    $replace_own = !empty($touched[self::INLINE_ERROR_KEY]) || !empty($touched[self::REPLACE_OWN_KEY]);
+    $targets = [
+      ...$touched[self::TRIGGER_KEY]['replaces'],
+      ...($element[self::REFRESHED_KEY] ?? []),
+      ...($replace_own ? [$own] : []),
+    ];
+    $marked = [];
+    foreach (array_unique($targets) as $dotted) {
+      $dotted = (string) $dotted;
+      $exists = FALSE;
+      $target = NestedArray::getValue($element, explode('.', $dotted), $exists);
+      if (!$exists || !is_array($target) || !isset($target[self::REFRESH_ID_KEY])) {
+        // Taken out, or never wrapped: the container goes whole, as the
+        // AJAX callback falls back to — coarser, never wrong.
+        (new Htmx())->swapOob('true')->applyTo($element);
+        return $element;
+      }
+      $marked[] = $dotted;
+    }
+    foreach ($marked as $dotted) {
+      foreach ($marked as $outer) {
+        if (str_starts_with($dotted, $outer . '.')) {
+          // Carried inside an element already swapped.
+          continue 2;
+        }
+      }
+      $parents = explode('.', $dotted);
+      NestedArray::setValue($element, $parents, static::outOfBand(NestedArray::getValue($element, $parents)));
+    }
+    if (isset($element[self::STALE_MARKER_KEY][self::REFRESH_ID_KEY])) {
+      $element[self::STALE_MARKER_KEY] = static::outOfBand($element[self::STALE_MARKER_KEY]);
+    }
+    if (isset($element[self::MESSAGES_KEY][self::REFRESH_ID_KEY])) {
+      // What the request put in the messenger, a stale value kept, in the
+      // container, where the AJAX callback prepends it; the previous
+      // request's go with the element this one replaces.
+      $element[self::MESSAGES_KEY]['messages'] = ['#type' => 'status_messages'];
+      $element[self::MESSAGES_KEY] = static::outOfBand($element[self::MESSAGES_KEY]);
+    }
+    return $element;
+  }
+
+  /**
+   * Finds the refinement trigger of a container by its input name.
+   *
+   * @param array $element
+   *   The container, or an element inside it, processed.
+   * @param string $name
+   *   The name the request says triggered it.
+   *
+   * @return string[]|null
+   *   The trigger's path below the container, or NULL when no trigger of
+   *   this container has that name.
+   */
+  protected static function triggerNamed(array $element, string $name): ?array {
+    foreach (static::elementChildren($element) as $key) {
+      $child = $element[$key];
+      if (isset($child[self::TRIGGER_KEY]['path']) && ($child['#name'] ?? NULL) === $name) {
+        return $child[self::TRIGGER_KEY]['path'];
+      }
+      $found = static::triggerNamed($child, $name);
+      if ($found !== NULL) {
+        return $found;
+      }
+    }
+    return NULL;
+  }
+
+  /**
+   * Marks an element's wrapper for an out-of-band swap.
+   *
+   * The wrapper is the div wrapped() opened in the element's #prefix, so
+   * the marker goes on that tag, through core's builder for it.
+   *
+   * @param array $element
+   *   An element carrying REFRESH_ID_KEY.
+   *
+   * @return array
+   *   The element, its wrapper marked.
+   */
+  protected static function outOfBand(array $element): array {
+    $id = (string) $element[self::REFRESH_ID_KEY];
+    $open = '<div id="' . Html::escape($id) . '">';
+    $prefix = (string) ($element['#prefix'] ?? '');
+    if (!str_starts_with($prefix, $open)) {
+      return $element;
+    }
+    $wrapper = ['#attributes' => ['id' => $id]];
+    (new Htmx())->swapOob('true')->applyTo($wrapper);
+    $element['#prefix'] = '<div' . new Attribute($wrapper['#attributes']) . '>' . substr($prefix, strlen($open));
+    return $element;
+  }
+
+  /**
+   * Adds values to what an HTMX trigger posts, keeping what it posted.
+   *
+   * @param array $element
+   *   The trigger, carrying `data-hx-vals`.
+   * @param array<string, string> $values
+   *   The values to add or replace.
+   */
+  protected static function amendHtmxVals(array &$element, array $values): void {
+    $posted = json_decode((string) ($element['#attributes']['data-hx-vals'] ?? ''), TRUE);
+    (new Htmx())->vals(array_replace(is_array($posted) ? $posted : [], $values))->applyTo($element);
+  }
+
+  /**
+   * {@inheritdoc}
+   */
+  public static function trustedCallbacks(): array {
+    return ['preRenderHtmxRefresh'];
   }
 
   /**
@@ -1252,6 +1532,10 @@ class DataSurfaceFormBuilder implements DataSurfaceFormBuilderInterface {
    * used when it falls back to returning the container; and the id is
    * sent back with every request, so the rebuild takes the same one.
    *
+   * Under the HTMX strategy the element gets core's HTMX attributes
+   * instead of an #ajax, and everything else here is the same: the
+   * trigger key, the wrapper, and the container's id sent back.
+   *
    * @param array $element
    *   The element built for the dependency.
    * @param string $wrapper_id
@@ -1260,26 +1544,62 @@ class DataSurfaceFormBuilder implements DataSurfaceFormBuilderInterface {
    *   The element's path below the container.
    * @param string[] $replaces
    *   The dotted paths of the elements depending on it, transitively.
+   * @param string $refresh
+   *   The refresh strategy, one of the REFRESH_* constants.
    *
    * @return array
    *   The element, wired or left as it was.
    */
-  protected function attachRefinementAjax(array $element, string $wrapper_id, array $path, array $replaces): array {
+  protected function attachRefinementAjax(array $element, string $wrapper_id, array $path, array $replaces, string $refresh = self::REFRESH_AJAX): array {
     if (!isset($element['#type']) || in_array($element['#type'], self::GROUPING_TYPES, TRUE)) {
       return $element;
     }
-    $element['#ajax'] = [
-      'callback' => [static::class, 'refreshSurface'],
-      'wrapper' => $wrapper_id,
-      // Core posts what is under 'submit' with the request, beside the
-      // trigger's name, which it puts there itself.
-      'submit' => [self::WRAPPER_INPUT => $wrapper_id],
-    ];
+    if ($refresh === self::REFRESH_HTMX) {
+      static::attachRefinementHtmx($element, $wrapper_id);
+    }
+    else {
+      $element['#ajax'] = [
+        'callback' => [static::class, 'refreshSurface'],
+        'wrapper' => $wrapper_id,
+        // Core posts what is under 'submit' with the request, beside the
+        // trigger's name, which it puts there itself.
+        'submit' => [self::WRAPPER_INPUT => $wrapper_id],
+      ];
+    }
     $element[self::TRIGGER_KEY] = ['path' => $path, 'replaces' => $replaces];
     // A wrapper of its own as well: a trigger is replaced when its own
     // value was refused, so the error is printed under it.
     $element[self::REFRESH_KEY] ??= implode('.', $path);
     return $element;
+  }
+
+  /**
+   * Wires a refinement dependency to rebuild the surface over HTMX.
+   *
+   * The trigger posts the whole form to the page it is on and swaps
+   * nothing itself (`hx-swap: none`): what it moved is marked in the
+   * response, out of band, by preRenderHtmxRefresh(), because which
+   * elements move is only known once the request has been judged. Core's
+   * HTMX JavaScript sends the trigger's name as `_triggering_element_name`
+   * (from the `HX-Trigger-Name` header), which is how Form API finds the
+   * triggering element of an HTMX request as it does an AJAX one, and
+   * only the main content comes back. The container's id rides along in
+   * `hx-vals`, as it does in the #ajax's 'submit'.
+   *
+   * @param array $element
+   *   The element built for the dependency.
+   * @param string $wrapper_id
+   *   The DOM id of the container.
+   */
+  protected static function attachRefinementHtmx(array &$element, string $wrapper_id): void {
+    (new Htmx())
+      ->post(Url::fromRoute('<current>'))
+      ->onlyMainContent()
+      ->trigger(in_array($element['#type'] ?? NULL, self::BLUR_TYPES, TRUE) ? 'blur' : 'change')
+      ->target('this')
+      ->swap('none')
+      ->vals([self::WRAPPER_INPUT => $wrapper_id])
+      ->applyTo($element);
   }
 
   /**
@@ -1302,11 +1622,13 @@ class DataSurfaceFormBuilder implements DataSurfaceFormBuilderInterface {
    *   The frame's path below the container.
    * @param string $wrapper_id
    *   The container's id.
+   * @param string $refresh
+   *   The refresh strategy, one of the REFRESH_* constants.
    *
    * @return array
    *   The element, marked and wired.
    */
-  protected function wireRefinement(array $element, DataSurfaceInterface $surface, array $values, array $path, string $wrapper_id): array {
+  protected function wireRefinement(array $element, DataSurfaceInterface $surface, array $values, array $path, string $wrapper_id, string $refresh = self::REFRESH_AJAX): array {
     $definitions = $surface->getDefinitions();
     // One property at a time inside the mount: a key an alter refines
     // there is a target of its own, and a key it watches there a trigger.
@@ -1347,6 +1669,7 @@ class DataSurfaceFormBuilder implements DataSurfaceFormBuilderInterface {
           array_replace($child->getDefaultValues(), is_array($held) ? $held : []),
           $at,
           $wrapper_id,
+          $refresh,
         );
       }
     }
@@ -1364,6 +1687,7 @@ class DataSurfaceFormBuilder implements DataSurfaceFormBuilderInterface {
           static fn (string $target): string => implode('.', [...$path, $target]),
           static::dependentsOf($dependency, $refinements),
         ),
+        $refresh,
       ));
     }
     return $element;
@@ -1486,6 +1810,9 @@ class DataSurfaceFormBuilder implements DataSurfaceFormBuilderInterface {
       }
       if (isset($element[$key]['#ajax']['submit'][self::WRAPPER_INPUT])) {
         $element[$key]['#ajax']['submit'][self::WRAPPER_INPUT] = $wrapper_id;
+      }
+      if (isset($element[$key][self::TRIGGER_KEY], $element[$key]['#attributes']['data-hx-vals'])) {
+        static::amendHtmxVals($element[$key], [self::WRAPPER_INPUT => $wrapper_id]);
       }
       $element[$key] = static::retargetAjax($element[$key], $wrapper_id);
     }

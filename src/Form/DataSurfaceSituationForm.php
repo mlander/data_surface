@@ -59,6 +59,9 @@ use Symfony\Component\HttpKernel\Exception\AccessDeniedHttpException;
  * first route parameter as the subject. A panel, named the same way by
  * the optional `_data_surface_panel` default, is placed inside the
  * surface container and rebuilt with it (DataSurfaceFormPanelInterface).
+ * The optional `_data_surface_refresh` default chooses how a refinement
+ * refreshes what it moved: `ajax`, the default, or `htmx`
+ * (docs/forms.md#htmx).
  * The defaults are
  * underscore-prefixed because Drupal's routing treats such defaults as
  * its own business: no parameter converter tries to upcast them and no
@@ -114,6 +117,13 @@ class DataSurfaceSituationForm extends FormBase {
    * nothing placed here is ever taken for a value.
    */
   public const PANEL_KEY = 'data_surface_panel';
+
+  /**
+   * The route default choosing the refresh strategy, if the route has one.
+   *
+   * `ajax` or `htmx`; a route that says nothing is served over AJAX.
+   */
+  public const REFRESH = '_data_surface_refresh';
 
   /**
    * Constructs a DataSurfaceSituationForm.
@@ -189,6 +199,7 @@ class DataSurfaceSituationForm extends FormBase {
       $values,
       $form_state,
       $this->surfaceWrapperKey($operation, $served->subject),
+      $this->surfaceRefresh(),
     );
     $panel = $this->surfacePanel();
     if ($panel !== NULL) {
@@ -379,6 +390,32 @@ class DataSurfaceSituationForm extends FormBase {
       ));
     }
     return $panel;
+  }
+
+  /**
+   * Gets the refresh strategy the route names.
+   *
+   * @return string
+   *   One of DataSurfaceFormBuilderInterface's REFRESH_* constants.
+   *
+   * @throws \LogicException
+   *   When the route names a strategy there is none of, which would
+   *   otherwise be served as AJAX without a word.
+   */
+  protected function surfaceRefresh(): string {
+    $refresh = (string) ($this->routeDefault(static::REFRESH) ?? '');
+    if ($refresh === '') {
+      return DataSurfaceFormBuilderInterface::REFRESH_AJAX;
+    }
+    $known = [DataSurfaceFormBuilderInterface::REFRESH_AJAX, DataSurfaceFormBuilderInterface::REFRESH_HTMX];
+    if (!in_array($refresh, $known, TRUE)) {
+      throw new \LogicException(sprintf(
+        'The %s route names "%s" as its refresh strategy, which is neither "ajax" nor "htmx".',
+        (string) $this->getRouteMatch()->getRouteName(),
+        $refresh,
+      ));
+    }
+    return $refresh;
   }
 
   /**

@@ -274,6 +274,133 @@ at build time, for two reasons that are easy to get wrong:
    because by the time a child is processed Form API has already taken
    its copy of the triggering element.
 
+## HTMX
+
+A second refresh strategy, opt-in, beside the `#ajax` one, which stays
+the default. A situation route asks for it with one more default:
+
+```yaml
+data_surface_examples.step2_htmx:
+  path: '/surface-examples/2/htmx'
+  defaults:
+    _form: 'Drupal\data_surface\Form\DataSurfaceSituationForm'
+    _data_surface_surface: 'Drupal\data_surface_examples\Surface\RegistrationStep2Surface'
+    _data_surface_situation: 'configure'
+    _data_surface_refresh: 'htmx'
+```
+
+Any other host passes the strategy to `buildSurfaceForm()` as its last
+argument, `DataSurfaceFormBuilderInterface::REFRESH_HTMX`. Examples 2
+and 3 have twins at `/surface-examples/2/htmx` and `/surface-examples/3/htmx`:
+the same surfaces, config objects and panel.
+
+### What a trigger carries
+
+Instead of an `#ajax`, core's `Htmx` builder, through `applyTo()`, which
+also attaches `core/drupal.htmx`. Example 2's venue:
+
+```html
+<select data-hx-post="/surface-examples/2/htmx"
+  data-hx-drupal-only-main-content
+  data-hx-trigger="change" data-hx-target="this"
+  data-hx-swap="none ignoreTitle:true"
+  data-hx-vals='{"_data_surface_wrapper":"data-surface-configure-wrapper"}'
+  name="surface[venue]" ...>
+```
+
+The trigger posts the whole form to its own page (`<current>`) and asks
+for the main content only. It is `change` for a select and `blur` for
+the types core's `#ajax` reads on blur, so both strategies ask at the
+same moment. It swaps nothing itself. Core's `htmx-assets.js` copies
+the `HX-Trigger-Name` header into `_triggering_element_name`, which is
+how Form API finds the triggering element of an AJAX request too.
+`hx-vals` carries what the `#ajax`'s `submit` carried: the container's
+id, and `_data_surface_invalid` once the trigger shows an error.
+
+### What comes back
+
+Core's form builder treats an HTMX request as an AJAX one: it disables
+the redirect, finds the trigger, applies `#limit_validation_errors`,
+rebuilds, caches the rebuilt form under a new build id, and marks the
+`form_build_id` input with `hx-swap-oob` aimed at the old id. Unlike
+the AJAX path it throws nothing: the rebuilt form is rendered as the
+page's main content and returned whole. The container's `#pre_render`,
+`preRenderHtmxRefresh()`, marks with `hx-swap-oob="true"` exactly the
+wrappers `refreshSurface()` would replace: each dependent, each element
+placed with `placeRefreshed()`, the stale marker, the messages, and the
+trigger only in [the three cases](#what-a-change-replaces). A venue
+change answers with five marked wrappers and the build id; the venue,
+the title and everything else in the response are unmarked, and HTMX
+drops them. A dependent nested inside another marked one is not marked
+again. When a dependent cannot be found, the container itself is
+marked, which is the AJAX path's fallback too.
+
+That response shape was chosen over the two alternatives:
+
+- **`hx-select-oob` on the trigger.** It is an attribute, fixed when the
+  page was rendered. What a request replaces is decided by that request:
+  the trigger only when its value was refused, its last request showed
+  an error, or its options moved. And a selector that matches nothing in
+  the response leaves the old element in place, so a stale marker could
+  never disappear.
+- **Only the fragments, from a response subscriber.** Core already
+  returns the rebuilt form for an HTMX request and already swaps the
+  build id out of band. Cutting the form into fragments would mean
+  taking that response apart after core built it, for a smaller payload
+  and nothing else.
+
+### Shared, and what had to differ
+
+Everything that decides what moved is the AJAX strategy's: the trigger's
+`TRIGGER_KEY` closure, the wrapper ids, the container's id sent back,
+the limit to the trigger's own value path (`limitAjax()` now limits any
+element carrying `TRIGGER_KEY`, not only one with an `#ajax`), the
+raw-input overlay, the discard cascade, the settle loop, the stale
+marker, the held trigger error printed by `InlineErrorHooks`, and the
+options-moved rule. None of it knows which strategy asked.
+
+What differs is all in the builder:
+
+| AJAX | HTMX |
+| --- | --- |
+| `refreshSurface()` answers with commands. | No callback. `prepareHtmxRefresh()` runs in the container's `#process` on the rebuild, where the form state is, gives the rebuilt trigger its held errors, and flags it when its options moved or its last request showed an error. `preRenderHtmxRefresh()` marks what moves, at render time. |
+| The stale marker is removed and appended again; the messages container is removed and prepended. | Both always render a wrapper, empty when there is nothing to say, because an out-of-band swap needs an element on the page to land on. On a refresh the messages wrapper holds `status_messages`. |
+| A replaced element loses its `#group`, because it is rendered on its own. | Nothing to undo: the element is rendered in place in the whole form, and HTMX finds it by id wherever a cosmetic layer put it. |
+| `_data_surface_invalid` goes into the trigger's AJAX settings. | It goes into the trigger's `hx-vals`. |
+
+### What each cannot do
+
+HTMX cannot do three things the AJAX strategy does:
+
+- **The surface's message, when Form API also refused the trigger.** When
+  Form API's own element validation stops the rebuild (a maximum length)
+  and the surface also refused the value, AJAX prints the surface's
+  message under the trigger. HTMX prints Form API's. The surface's
+  message is held in temporary form state, and the only HTMX hook that
+  sees this case, `#pre_render`, has no form state. Both still print one
+  message, inline, and take it off the top.
+- **A small response.** Every refresh returns the whole main content,
+  the panel's JSON included, where AJAX returns only what moved.
+- **A throbber.** Core's `#ajax` shows one. HTMX only adds the
+  `htmx-request` class to the trigger, which no theme styles.
+
+The reverse:
+
+- **Rendering as the page renders.** The response is the form itself, so
+  what a cosmetic layer, a form alter or a theme does to it arrives as a
+  full page shows it, with no special case for a replaced element.
+- **No `drupalSettings` bookkeeping.** What the next request posts is in
+  the trigger's attributes and is replaced with it.
+
+One limit is on the hosts rather than the strategy. An `#ajax` posts
+to the form's own action, so it works wherever the form is shown. An
+HTMX trigger posts to the page it is on and takes that page's main
+content back, so it works only where the form is the main content of
+its route. A block's form in an off-canvas dialog cannot use it as
+built. `DataSurfaceSituationForm` is the only host that asks for it
+today.
+[Decision](decisions.md#which-refresh-strategy-should-be-the-default).
+
 ## The SubformState lesson
 
 Form API assigns `#parents` from the root of the complete form, so they
@@ -621,6 +748,7 @@ The defaults:
 | `_data_surface_situation` | One of its situation ids. |
 | `_data_surface_cosmetics` | Optional. A service id or class implementing `Form\DataSurfaceFormCosmeticsInterface`. |
 | `_data_surface_panel` | Optional. A service id or class implementing `Form\DataSurfaceFormPanelInterface`: something shown inside the surface, rebuilt with it. |
+| `_data_surface_refresh` | Optional. `ajax`, the default, or `htmx`: how a refinement refreshes what it moved ([HTMX](#htmx)). |
 
 The route's parameters are the situation method's, by name: an upcast
 entity parameter arrives as the entity, a plain one as its value, so

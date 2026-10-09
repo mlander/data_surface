@@ -174,6 +174,7 @@ final class ExamplesController extends ControllerBase {
         'sentence' => $this->t('The venue narrows the rooms on offer, and the room narrows how many people fit: one small method each, whose signature says what it reads.'),
         'items' => [
           $this->route('data_surface_examples.step2'),
+          $this->htmx('data_surface_examples.step2_htmx'),
           $this->react('registration.step2'),
           $this->lines(RegistrationStep2Surface::class),
         ],
@@ -183,6 +184,7 @@ final class ExamplesController extends ControllerBase {
         'sentence' => $this->t('The pricing chooses which ticket surface fills a slot, and a contact surface is always attached; each part is a class of its own.'),
         'items' => [
           $this->route('data_surface_examples.step3'),
+          $this->htmx('data_surface_examples.step3_htmx'),
           $this->react('registration.step3'),
           $this->lines(RegistrationStep3Surface::class),
         ],
@@ -220,6 +222,20 @@ final class ExamplesController extends ControllerBase {
   protected function route(string $route): array {
     $url = Url::fromRoute($route);
     return Link::fromTextAndUrl($url->toString(), $url)->toRenderable();
+  }
+
+  /**
+   * Links an example's HTMX twin: the same form, refreshed over HTMX.
+   *
+   * @param string $route
+   *   The twin's route name.
+   *
+   * @return array
+   *   A link render array.
+   */
+  protected function htmx(string $route): array {
+    $url = Url::fromRoute($route);
+    return Link::fromTextAndUrl($this->t('In HTMX: @path', ['@path' => $url->toString()]), $url)->toRenderable();
   }
 
   /**

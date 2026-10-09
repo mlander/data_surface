@@ -56,7 +56,10 @@ that spot needs it.
 Situations are what routes and tools are generated from. A route names
 `_data_surface_surface` and `_data_surface_situation` and maps its
 parameters onto the situation's by name (`SituationRoute`), gated by
-`_data_surface_situation_access`; `DataSurfaceSituationForm` serves it.
+`_data_surface_situation_access`; `DataSurfaceSituationForm` serves it. A route
+may add `_data_surface_refresh: htmx` to refresh over core's HTMX
+instead of `#ajax`; everything that decides what a change replaces is
+shared (`docs/forms.md#htmx`; the default is open in `docs/decisions.md`).
 `data_surface_tool` derives one tool per situation that can be asked
 on its own, `data_surface:<surface>:<situation>`: its surface names a
 target, no plugin uses it, and every `%key` in its permission can be
@@ -91,17 +94,19 @@ ddev exec bash -c 'cd /var/www/html/web && SIMPLETEST_DB=mysql://db:db@db/db \
   modules/custom/data_surface'
 ```
 
-The baseline as of this writing: **736 tests, 7383 assertions, 0 errors,
-3 failures** — the three tests of the one class below. The test and
+The baseline as of this writing: **739 tests, 7464 assertions, 0 errors,
+4 failures** — every test of the two classes below. The test and
 assertion counts drift upward as work lands and are not the thing to
 check. **No test may error,
 and the only tests that may fail are the ones in
-`DataSurfaceRefinementTest`**, for a reason that is not this module's:
+`DataSurfaceRefinementTest` and `ExamplesHtmxRefreshTest`**, for a
+reason that is not this module's:
 
-1. `DataSurfaceRefinementTest` — environmental, every test in it.
-   `DriverException: Could not open connection` on port 4444; ddev runs
-   no webdriver. That class is the invariant; a failure anywhere else is
-   a real regression.
+1. `DataSurfaceRefinementTest` (three tests) and
+   `ExamplesHtmxRefreshTest` (one, the HTMX strategy in a browser) —
+   environmental, every test in them. `DriverException: Could not open
+   connection` on port 4444; ddev runs no webdriver. Those classes are
+   the invariant; a failure anywhere else is a real regression.
 
 There are no open findings. The two that stood here —
 `NodeTypeSurfaceFormTest::testAddStoresTheTypeAndItsOverrides` and

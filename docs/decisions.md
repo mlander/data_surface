@@ -448,8 +448,14 @@ maximum length, does stop the rebuild; it is printed the same way and
 taken back out of the messages at the top, so it is not said twice
 either. The surface's message wins when both have one. On a full
 submission nothing changes: core prints every error at the top and
-marks the elements. (`DataSurfaceFormBuilder::flagSurfaceErrors()`,
-`DataSurfaceFormBuilder::refreshSurface()`, `Hook\InlineErrorHooks`)
+marks the elements. The HTMX strategy does the same, from the
+container's `#process` and `#pre_render` instead of a callback, with one
+exception: when Form API's own validation stopped the rebuild, the
+surface's message does not win, because it is held in form state that
+`#pre_render` cannot reach ([HTMX](forms.md#what-each-cannot-do)).
+(`DataSurfaceFormBuilder::flagSurfaceErrors()`,
+`DataSurfaceFormBuilder::refreshSurface()`,
+`DataSurfaceFormBuilder::preRenderHtmxRefresh()`, `Hook\InlineErrorHooks`)
 
 ### A Regex is explained by its message
 
@@ -504,6 +510,23 @@ key. Pipeline callers are unaffected: a payload that leaves a key out
 keeps it, one that sends the stored stale value back keeps it with a
 stale entry, as before. (`OptionsWidget::singleSelect()`,
 `DataSurfaceWidgetBase::unstash()`, `DataSurfaceHostTrait::surfaceFormValues()`)
+
+### Which refresh strategy should be the default
+
+*Open.* A situation route may ask for HTMX instead of Form API `#ajax`
+(`_data_surface_refresh: htmx`). Every rule about what a change
+replaces is shared, so the two differ only in transport, and the AJAX
+strategy stays the default until this is decided. For HTMX: the
+response is the form as the page renders it, with no command list and
+no `#group` special case, and it is core's newer API. Against it: every
+refresh returns the whole main content, there is no throbber, and it
+works only where the form is its route's main content, so plugin hosts
+cannot use it as built. One case is weaker under HTMX: when Form API's
+own element validation stops the rebuild, it prints Form API's message
+where AJAX prints the surface's. Deciding needs the WebDriver test
+(`ExamplesHtmxRefreshTest`) run in CI, a payload measurement on a large
+surface, and an answer for plugin hosts.
+([HTMX](forms.md#htmx), `DataSurfaceFormBuilder::preRenderHtmxRefresh()`)
 
 ## Discovery
 

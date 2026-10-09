@@ -14,7 +14,8 @@ use Drupal\data_surface\Pipeline\ViolationSet;
  *
  * The refinement-aware layer: the surface is refined against current
  * values before elements build, and every definition that others refine
- * against is wired to rebuild the surface container via AJAX — the
+ * against is wired to rebuild the surface container via AJAX, or via
+ * HTMX when the host asks for REFRESH_HTMX — the
  * rendered form and the refined definitions stay in lockstep by
  * construction.
  *
@@ -116,6 +117,27 @@ interface DataSurfaceFormBuilderInterface {
   public const INLINE_ERROR_KEY = '#data_surface_inline_error';
 
   /**
+   * Refresh strategy: Form API #ajax and an AjaxResponse of commands.
+   *
+   * The default. refreshSurface() answers a trigger with one command per
+   * element its change moved.
+   */
+  public const REFRESH_AJAX = 'ajax';
+
+  /**
+   * Refresh strategy: core's HTMX, with the rebuilt form as the response.
+   *
+   * Opt-in. A trigger posts the form with HTMX and swaps nothing itself;
+   * the rebuilt form comes back whole, as core's form builder renders an
+   * HTMX request, and the elements the change moved carry an out-of-band
+   * swap marker, so they and nothing else take their place on the page.
+   * Everything that decides what moved is the AJAX strategy's.
+   *
+   * @see docs/forms.md#htmx
+   */
+  public const REFRESH_HTMX = 'htmx';
+
+  /**
    * Builds a container of form elements for a surface.
    *
    * @param \Drupal\data_surface\DataSurfaceInterface $surface
@@ -127,12 +149,15 @@ interface DataSurfaceFormBuilderInterface {
    *   The form state of the containing form.
    * @param string $wrapper_key
    *   A stable identifier for the AJAX wrapper, unique within the page.
+   * @param string $refresh
+   *   How a refinement trigger refreshes what it moved: REFRESH_AJAX, the
+   *   default, or REFRESH_HTMX.
    *
    * @return array
    *   A container render array with one widget-built element per
    *   definition, keyed by surface key.
    */
-  public function buildSurfaceForm(DataSurfaceInterface $surface, array $values, FormStateInterface $form_state, string $wrapper_key = 'data-surface'): array;
+  public function buildSurfaceForm(DataSurfaceInterface $surface, array $values, FormStateInterface $form_state, string $wrapper_key = 'data-surface', string $refresh = self::REFRESH_AJAX): array;
 
   /**
    * Names the in-progress input a rebuild has just invalidated.
@@ -400,6 +425,10 @@ interface DataSurfaceFormBuilderInterface {
    * may replace gets its wrapper, with an id derived from the
    * container's, which is only final once a host has merged the
    * container into its own element.
+   *
+   * Under the HTMX strategy it also renders the wrappers an out-of-band
+   * swap lands on, prepares the rebuilt trigger the way the AJAX
+   * callback would, and adds the #pre_render that marks what moved.
    *
    * It has to be a #process callback on the container rather than a
    * property written at build time, because a container does not know

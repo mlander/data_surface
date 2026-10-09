@@ -515,6 +515,23 @@ does not change the answers. Enable it and send the first call with a
 capacity of 150, which the upper deck seats, and no licence to see it
 refuse.
 
+## In HTMX
+
+Examples 2 and 3 again, refreshed through core's HTMX instead of Form
+API `#ajax`: `/surface-examples/2/htmx` and `/surface-examples/3/htmx`,
+linked from the landing page "In HTMX". Each is the same surface, the
+same config object and the same panel as the form it twins. Its route
+differs by one default, `_data_surface_refresh: htmx`, and nothing else.
+
+Change the venue on example 2: the venue select posts the form with
+HTMX, Form API rebuilds it as it does for AJAX, and the page swaps in
+the room, the capacity, the panel and the stale marker, which the
+response marks out of band. The venue you touched stays where it is.
+Everything described under example 2 and example 4 happens the same
+way, the licence's error under its field included.
+[Generated forms](../../docs/forms.md#htmx) has what differs from the
+AJAX twin and what does not.
+
 ## In React
 
 Examples 1 to 3 again, with no Form API: the same situation served as a
@@ -567,6 +584,9 @@ Drush commands are checked against `ExampleCalls`.
 | `Kernel\ExamplesToolTest` | Example 5: the three calls and their answers; what the script prints. |
 | `Unit\ExamplesReadmeTest` | This page against the files it quotes, and its Drush commands. |
 | `Functional\ExamplesRoutesTest` | Every route answers an administrator and refuses anonymous; the landing page; a save through example 3. |
+| `Kernel\ExamplesHtmxTest` | In HTMX: example 2's venue and room carry core's HTMX attributes and library instead of an `#ajax`; the AJAX route beside it is unchanged. |
+| `Functional\ExamplesHtmxTest` | In HTMX: a venue change and then a room change posted as HTMX requests; exactly which elements the response swaps out of band, what they hold, and the build id. |
+| `FunctionalJavascript\ExamplesHtmxRefreshTest` | In HTMX, in a browser: the same two changes. Needs a webdriver, which ddev does not have. |
 | `Functional\ServedContractEndpointsTest` | In React: the landing page's links, and example 2's contract, refine and validate over HTTP. |
 | `Functional\ServedSubmitEndpointTest` | In React: example 2 saved over HTTP, refused, and refused after someone else saved. |
 | `Kernel\ExamplesResetTest` | Reset to defaults puts every example, and what another module stored on example 3, back to the shipped files. |
