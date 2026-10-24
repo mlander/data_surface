@@ -27,7 +27,7 @@ page of its own.
 | Is this group of keys a thing of its own? | `attach($key, Child::class)`: a fixed child, its keys stored as a map under the key, behind the wall; the schema refers to the child's def at the key. | The contact, `/surface-examples/3`; the press contact, `/surface-examples/8` | [Children](#children) |
 | Are these keys shared members that are part of this thing? | `mixIn(Structure::class)`: a mixin, its members the owner's own keys, stored flat beside them; the schema is `allOf` of the structure's def and the owner's properties. | The review, `/surface-examples/8` | [Mixins](#mixins) |
 | Does a structure need a value its container holds? | `reads($port, $type)` in the structure, wired by `attach(..., reads: [$port => $key])`: a port, the value kept at the container's key and stored by nothing in the structure; the def lists its ports, and what depends on one is stated on the container's `allOf`. | The person's `listed`, `/surface-examples/8` and `/surface-examples/8/desk` | [Ports](#ports) |
-| Does one key's value choose which further keys apply? | `attachVariants($key, by: $sibling)` and a `#[Variant]` per value: variants, the chosen variant's keys stored under the key; the schema is an `if`/`then` on the sibling for each variant. | The ticket, `/surface-examples/3` | [Variants](#variants) |
+| Does one key's value choose which further keys apply? | `attachVariants($key, by: $sibling)` and a `#[Variant]` per value, or `from:` a provider that lists them from the site, each with its schema: variants, the chosen variant's keys stored under the key; the schema is an `if`/`then` on the sibling for each variant. | The ticket, `/surface-examples/3`; a component's props, `/surface-examples/12` | [Variants](#variants), [from the site](#variants-from-the-site) |
 | Does a group of keys repeat? | `attachList($key, Child::class, min:, max:)`: a collection, a list under the key whose every item is the child's keys; the schema is an array whose `items` refer to the child's def, its Count as `minItems` and `maxItems`. | The volunteers, `/surface-examples/8/desk` | [Collections](#collections) |
 | Is there one key per thing the site has? | `addEach()` or `attachEach()` with a provider: keys from the site, a map under the key with one entry per thing the provider lists at every build; the schema states every entry, the map a def of the owner's. | The ticket types, `/surface-examples/9` | [Keys that come from the site](#keys-that-come-from-the-site) |
 
@@ -177,14 +177,14 @@ Each class's `use` line: [Namespaces](concepts.md#namespaces).
   an operation belongs to, a storage class, an access class. Never an
   instance or a string.
 
-## Operations: add, edit, and the rest
+## Operations: create, update, and the rest
 
-A resource never mentions add or edit. The difference is how much is
+A resource never mentions create or update. The difference is how much is
 already known, and that is a **context**, an `OperationContext`:
 
 - `#[Resource(identity: [...])]` names the identity keys. An identity
   key the context knows is locked to that value; one it does not know
-  stays open. That is the whole difference between add and edit. A
+  stays open. That is the whole difference between create and update. A
   resource with no identity keys is a singleton.
 - The ways a resource is asked for are `#[Operation]` attributes. Each
   states the operation's static facts, read at discovery without
@@ -233,16 +233,21 @@ already known, and that is a **context**, an `OperationContext`:
   operation that does not create is idempotent, one that creates is not,
   a read only one is; say `idempotent:` only where you know better: an
   operation that appends is not, and a create whose caller names the
-  thing (`node.type:add`, `field.instance:add`) is, a second identical
+  thing (`node.type:create`, `field.instance:create`) is, a second identical
   call finding the name taken. A tool carries them to the Tool API,
   which MCP reads as a tool's annotations, and both schema documents
   state them at the top, under `x-surface.operation`
   ([decision](decisions.md#an-operation-states-how-it-behaves)). A read
   only operation writes nothing at any door: its pipeline accepts,
   validates and prepares, stops where a dry run does, and refuses to
-  commit what it prepared. No
-  shipped operation is destructive: an edit changes the keys it is sent,
-  and a key left out keeps its value.
+  commit what it prepared. An update
+  destroys nothing: it changes the keys it is sent, and a key left out
+  keeps its value. `deletes: TRUE`, beside `destructive: TRUE`, makes an
+  operation a delete: it takes no values, its storage removes the thing
+  its context names (`DeletableStorageInterface`), its tool takes the
+  parameters and a dry run, and HTTP serves it as `DELETE` (the
+  placement's `delete`,
+  [decision](decisions.md#a-placed-block-is-a-resource)).
 
 The content type resource is the worked example:
 
@@ -254,24 +259,24 @@ The content type resource is the worked example:
 )]
 final class NodeTypeResource implements ResourceInterface {
 
-  #[Operation('add',
+  #[Operation('create',
     label: new TranslatableMarkup('Add a content type'),
     description: new TranslatableMarkup('Creates a content type under a machine name the caller chooses; a machine name already in use is refused.'),
     permission: self::PERMISSION,
     creates: TRUE,
     idempotent: TRUE,
   )]
-  public static function add(): OperationContext {
-    // Unique on add only: that is where you are, not what was entered.
+  public static function create(): OperationContext {
+    // Unique on create only: that is where you are, not what was entered.
     return (new OperationContext())->withConstraint('type', 'DataSurfaceUniqueNodeType');
   }
 
-  #[Operation('edit',
+  #[Operation('update',
     label: new TranslatableMarkup('Edit a content type'),
     description: new TranslatableMarkup('Changes a content type, named by its machine name, which stays as it is.'),
     permission: self::PERMISSION,
   )]
-  public static function edit(NodeTypeInterface $type): OperationContext {
+  public static function update(NodeTypeInterface $type): OperationContext {
     return new OperationContext(known: ['type' => $type->id()]);
   }
 
@@ -280,8 +285,8 @@ final class NodeTypeResource implements ResourceInterface {
 }
 ```
 
-Both are methods because their contexts need more: add narrows the
-machine name, edit knows it. A settings object's one `configure` needs
+Both are methods because their contexts need more: the create narrows
+the machine name, the update knows it. A settings object's one `configure` needs
 nothing, so it is the attribute alone, as on [the first
 resource](first-resource.md):
 
@@ -296,10 +301,10 @@ final class NewsletterResource implements ResourceInterface {
 ```
 
 and the field instance resource has three, each knowing more than the
-last: `add($entity_type_id, $bundle)`, `reuse($storage, $bundle)` (an
-add for the field and, through `withChild('storage',
-FieldStorageResource::edit($storage))`, an edit for its storage) and
-`edit($field)`. The storage's edit operation narrows cardinality not to
+last: `create($entity_type_id, $bundle)`, `reuse($storage, $bundle)` (a
+create for the field and, through `withChild('storage',
+FieldStorageResource::update($storage))`, an update for its storage) and
+`update($field)`. The storage's update operation narrows cardinality not to
 shrink once the field has data, with `withConstraint()`, and knows the
 field type, its one identity key, which locks its settings to that
 type's.
@@ -310,7 +315,7 @@ Each class's `use` line: [Namespaces](concepts.md#namespaces).
 $resources = \Drupal::service('data_surface.resources');
 // By parameter name or position; an entity parameter takes the entity
 // or its id, loaded by the entity type whose class satisfies the type.
-$context = $resources->operation(NodeTypeResource::class, 'edit', ['type' => 'article']);
+$context = $resources->operation(NodeTypeResource::class, 'update', ['type' => 'article']);
 $surface = $resources->build(NodeTypeResource::class, $context);
 $access = $resources->access(NodeTypeResource::class, $context);
 $storage = $resources->storage(NodeTypeResource::class, $context, $surface);
@@ -318,6 +323,60 @@ $storage = $resources->storage(NodeTypeResource::class, $context, $surface);
 
 A generic caller passes an empty context: every identity key stays
 open, and it is still the same resource.
+
+### An operation that takes keys of its own
+
+Most operations take the resource's keys: a create sends them, an update
+changes some. An operation about the things together takes other keys:
+a listing's page and filter, a reorder's ids and weights. It names the
+structure they are with `values:` on its `#[Operation]`, and that
+structure's inputs are what it takes and its outputs what it answers
+([decision](decisions.md#a-listing-is-a-read-only-operation-with-outputs-a-reorder-is-an-update-over-the-collection)):
+
+```php
+#[Operation('list',
+  label: new TranslatableMarkup('List the venues'),
+  description: new TranslatableMarkup('Answers a page of the venues, lighter first, each one the account may read, and how many the filter matched.'),
+  permission: self::VIEW,
+  readOnly: TRUE,
+  values: VenueListingStructure::class,
+)]
+#[Operation('reorder',
+  label: new TranslatableMarkup('Reorder the venues'),
+  description: new TranslatableMarkup('Gives each venue named its new weight, all in one write; a venue left out keeps its own, and an unknown or repeated venue is refused.'),
+  permission: self::ADMINISTER,
+  values: VenueReorderStructure::class,
+)]
+```
+
+- **What stays the resource's.** Its permission, its access class, its
+  storage and how the operation behaves are the resource's: the build
+  writes the structure's keys, refiners, rules and children where the
+  resource's would be, and nothing else changes. The structure is a
+  `#[Structure]` with no identity and no storage; one that is not is
+  refused when the operation is first built.
+- **No subject.** Such an operation names no thing, so it needs no
+  parameter and is addressed at the collection; its storage reads the
+  context's id to know which it is. Its keys are no keys the storage
+  holds, so none is marked always held, and the build does not hold
+  them to the config schema the storage writes to.
+- **A read answers its outputs.** A read only operation is never
+  committed, so its outputs are what its storage's `prepare()` answered
+  under an output's name ([Who produces
+  outputs](decisions.md#who-produces-outputs)): `VenueStorage` reads the
+  venues there and answers the page and the total. Its tool answers them
+  beside the one result shape; on HTTP, `GET` on the collection runs it
+  and answers them alone ([a listing](served-contract.md#a-listing)).
+- **An update writes what it names.** The reorder is an update over
+  the collection: its storage loads every venue's id and weight, and
+  its `prepare()` refuses an id that names no venue (`not_found`) or is
+  named twice (`taken`), by its place in the list, and rehearses the rest;
+  `commit()` saves them. Its read tool answers the current order, and on
+  HTTP it is a custom method, `PATCH /surface-api/event.venue:reorder`.
+- **Refused** on an operation that creates or deletes, which is about
+  the thing's own keys.
+
+Each class's `use` line: [Namespaces](concepts.md#namespaces).
 
 ### Routes from operations
 
@@ -329,12 +388,12 @@ composed storage and submits through the pipeline to it. The route's
 requirement is the operation's access:
 
 ```yaml
-data_surface_demo_node_type.edit:
+data_surface_demo_node_type.update:
   path: '/admin/structure/types/manage/{type}/surface-edit'
   defaults:
     _form: 'Drupal\data_surface\Form\DataSurfaceOperationForm'
     _data_surface_resource: 'Drupal\data_surface_demo_node_type\Resource\NodeTypeResource'
-    _data_surface_operation: 'edit'
+    _data_surface_operation: 'update'
     _data_surface_cosmetics: 'data_surface_demo_node_type.form_cosmetics'
   requirements:
     _data_surface_operation_access: 'TRUE'
@@ -372,7 +431,9 @@ Two tiers, and another module's alter may answer after both
   the permission allows: what depends on the thing itself.
   `NodeTypeAccess` asks the node type entity whether one may be created,
   or this one updated, so this module never grants more than core's own
-  form; `FieldInstanceAccess` refuses a locked storage.
+  form; `FieldInstanceAccess` refuses a locked storage. It answers for
+  the account it is handed and reads nothing a door has
+  ([No door-specific context](#no-door-specific-context)).
 
 `ResourcesInterface::access()` is that answer, and every caller reads it:
 the route requirement `_data_surface_operation_access`, the form's
@@ -490,14 +551,17 @@ account; a state-based one is settled at call time
 
 **Narrowing by account is not access.** "An editor sees fewer venues"
 narrows the values a key allows, which is a refiner's: it reads the
-current user, so it is a runtime refiner, and the full schema keeps the
-key wide and marked `live`. Access only says whether the keys may be
-changed, seen, or neither.
+account, so it is a runtime refiner, and the full schema keeps the key
+wide and marked `live`. Access only says whether the keys may be
+changed, seen, or neither. The refiner takes the account as its last
+parameter, typed `AccountInterface`, and is handed the account the
+operation runs as; it never reads the current user itself
+([No door-specific context](#no-door-specific-context)).
 
 ```php
 #[RefinesInput('room', runtime: TRUE)]
-public static function roomsForAccount(DataDefinitionInterface $room): DataDefinitionInterface {
-  if (\Drupal::currentUser()->hasPermission('use the vault')) {
+public static function roomsForAccount(DataDefinitionInterface $room, AccountInterface $account): DataDefinitionInterface {
+  if ($account->hasPermission('use the vault')) {
     return $room;
   }
   return $room->addConstraint('LabeledChoice', ['choices' => array_diff_key(self::ROOMS, ['vault' => TRUE])]);
@@ -531,12 +595,15 @@ it along the tree:
 
 ## Prepare
 
-`prepare(OperationContext $context, array $values): array` rehearses the
-write. It builds what `commit()` would store, in storage's own layout,
-holds it to every check storage itself would make (the config schema,
-which for a config entity is also its entity validation) and has no
-side effects. It returns that array, and `commit(OperationContext
-$context, array $prepared)` writes exactly it.
+`prepare(OperationContext $context, array $values, AccountInterface
+$account): array` rehearses the write. It builds what `commit()` would
+store, in storage's own layout, holds it to every check storage itself
+would make (the config schema, which for a config entity is also its
+entity validation) and has no side effects. It returns that array, and
+`commit(OperationContext $context, array $prepared, AccountInterface
+$account)` writes exactly it. Both are handed the account the write is
+made as, which a storage that records who wrote reads there
+([No door-specific context](#no-door-specific-context)).
 
 - **A dry run stops after prepare** and reports what it returned. The
   pipeline's result carries it as `PreparedValues`; the adapter's
@@ -570,6 +637,64 @@ $context, array $prepared)` writes exactly it.
 - What a prepare returns is what is stored: the node type's prepared
   array is the config the commit writes, uuid included.
 
+## No door-specific context
+
+Everything an operation needs comes through it: the parameters and
+identity its context knows, the values, the account, and site state
+through services whose answers carry their cacheability. Nothing the
+build or the pipeline runs on an operation's behalf reads the request,
+its route, the session, the form being built, the theme a page renders
+in, or the current user, because code that does behaves one way on the
+form and another over HTTP or through a tool, and the doors stop
+agreeing. The doors themselves (the operation form, the HTTP API, the
+tool, the React page) read the request: that is their job, and each
+turns it into a context, values and an account
+([decision](decisions.md#nothing-an-operation-runs-reads-the-request)).
+
+| What runs | It may read | It gets the account |
+| --- | --- | --- |
+| A static refiner, a computed key's deriver | the keys it watches or is computed from, and nothing else | never |
+| A declared rule | nothing: it is data the engine evaluates | never |
+| A runtime refiner | site state through a service with cacheability | as its last parameter, typed `AccountInterface` |
+| An access class, an alter answering access | site state with cacheability; a static answer the account alone | `access($context, $account)` |
+| An alter's keys and refiners | site state with cacheability | as a runtime refiner does |
+| A provider of keys or variants from the site, a deriver of variants or resources, an options resolver | site state with cacheability; never anything varying by the account | never |
+| A storage's `load()` | what it stores | never: what is stored is no account's |
+| A storage's `prepare()`, `commit()`, `prepareDelete()`, `delete()` | what it stores, and site state its checks read | as its last argument |
+
+Refused to all of them: `request_stack`, `current_route_match`,
+`router.request_context`, `session`, `session_manager`,
+`tempstore.private`, `form_builder`, `path.current`,
+`path_alias.manager`, `theme.manager` and `current_user`, by
+`\Drupal::request()`, `::routeMatch()`, `::currentUser()`,
+`::formBuilder()`, `::theme()`, `::service()` or injection alike.
+
+**The account is an argument.** A door makes the account it runs for
+the current user, and the build reads it once and hands it on: to an
+access class as it always did, to each storage write verb, and to a
+runtime refiner that asks for it. `ResourcesInterface::storage()` takes
+an account for a write made as another than the current user, as
+`access()` does, and a content entity written through
+`ContentEntityStorage` is that account's and its new revision by it:
+
+```php
+$storage = $resources->storage('entity.content:node.page', $context, $surface, $account);
+$pipeline->submit($surface, $values, $storage, access: $resources->access('entity.content:node.page', $context, $account));
+```
+
+**Held in three ways.** With assertions on, each such call runs with the
+global container guarded (`Pipeline\PipelineGuard`): the class's own
+code asking for one of those services throws, naming the service, the
+class, the method and why, and an instance built with one injected is
+refused when it is first used. Core's code it calls is core's. The
+module's PHPStan rule (`tests/src/PHPStan/DoorSpecificRule.php`) flags
+the same reads before anything runs. And
+`Tests\data_surface\Traits\DoorAgreementTrait` sends one document
+through the pipeline, the tool, the HTTP API and the form and holds
+them to one answer, for an adopter's resources through
+`ResourceTestBase` ([Testing a resource](testing-a-resource.md)) and
+for this repository's in `EveryDoorAgreesTest`.
+
 ## Tools
 
 With `data_surface_tool` enabled, an operation that can be asked on its
@@ -578,12 +703,12 @@ own is a tool, `data_surface:<resource id>:<operation id>`, derived by
 
 | Tool | Inputs |
 | --- | --- |
-| `data_surface:node.type:add` | `values` (every key, `type` unique), `dry_run` |
-| `data_surface:node.type:edit` | `type` (the content type's id), `values` (every key but `type`), `dry_run` |
-| `data_surface:field.instance:add` | `entity_type_id`, `bundle`, `values`, `dry_run` |
+| `data_surface:node.type:create` | `values` (every key, `type` unique), `dry_run` |
+| `data_surface:node.type:update` | `type` (the content type's id), `values` (every key but `type`), `dry_run` |
+| `data_surface:field.instance:create` | `entity_type_id`, `bundle`, `values`, `dry_run` |
 | `data_surface:field.instance:reuse` | `storage` (its id), `bundle`, `values`, `dry_run` |
-| `data_surface:field.instance:edit` | `field` (its id), `values`, `dry_run` |
-| `data_surface:field.storage:edit` | `storage` (its id), `values`, `dry_run` |
+| `data_surface:field.instance:update` | `field` (its id), `values`, `dry_run` |
+| `data_surface:field.storage:update` | `storage` (its id), `values`, `dry_run` |
 
 - **Inputs** are the operation's parameters, by name (an entity
   parameter as the entity's id, resolved when the tool runs; a scalar
@@ -598,7 +723,7 @@ own is a tool, `data_surface:<resource id>:<operation id>`, derived by
   default: each key the resource requires says "Required; a value
   already stored stands when left out.", since a listing is cached by
   its clients and the Tool API refuses a required key left out before
-  the tool runs. The pipeline still refuses an edit
+  the tool runs. The pipeline still refuses an update
   of a thing that holds no value for a required key, in the key's own
   words
   ([decision](decisions.md#required-is-the-resources-and-an-update-tool-requires-nothing-at-its-door)).
@@ -616,7 +741,7 @@ own is a tool, `data_surface:<resource id>:<operation id>`, derived by
   what is allowed for them
   ([decision](decisions.md#a-refusal-names-what-it-depends-on)), by path
   and by what to send: "room: The value you selected is not a valid
-  choice. This applies when venue is riverside (Riverside Hall). Choose
+  choice. This applies when Venue is riverside (Riverside Hall). Choose
   riverside_main (Main hall) or riverside_east (East room)."
 - **Title and description** are the operation's. The title is its
   label; where operations of several resources share one, each tool
@@ -649,7 +774,7 @@ two (`ResourceCatalog::standalone()`):
 1. **A permission nothing can name.** An operation whose permission has
    a `%key` placeholder that none of its parameters can supply (one
    named for it, or an entity its operation reads identity off) could
-   never be allowed, so it is no tool. `field.storage`'s `add` needs
+   never be allowed, so it is no tool. `field.storage`'s `create` needs
    nothing and asks `administer %entity_type_id fields`: only a field
    adding its storage can ask it, as that field's child.
 2. **Something a host or a parent stores.** A class with no storage of
@@ -670,8 +795,8 @@ is what the composed storage loads, in the shape the write tool's
 every secret, at any depth. Its access is the write tool's. Which
 operations those are is `ResourceCatalog::reads()`: the updates, read
 off the attribute, an operation that neither creates nor is read only.
-So `node.type:edit`, `field.instance:edit` and `field.storage:edit`
-read, and `node.type:add`, `field.instance:add` and
+So `node.type:update`, `field.instance:update` and `field.storage:update`
+read, and `node.type:create`, `field.instance:create` and
 `field.instance:reuse` do not.
 
 ## Catalog
@@ -803,6 +928,23 @@ plugin in the test module are written this way; the demo formatter and
 the test module's sticky note block are their own structure. What a
 plugin holds is never a tool (see Tools).
 
+`data_surface_component_block` is the case of a plugin whose settings
+are variants from the site: its block, "Component", names a structure of
+example 12's two lines, a component chosen from those the site has and
+its props read from the schema the component declares
+(`ComponentProps`, the main module's provider), and renders the
+component with the props it holds. The component is not required, since
+the host builds the block from its defaults before anything is chosen.
+A placed block is a config entity with a machine name, and
+`data_surface_block` declares it as a resource, `block.placement`, whose
+plugin chooses its settings: for this plugin, the same structure, as
+declared ([Variants from the site](#variants-from-the-site)). The tool
+bridge derives its tools, which place, configure, read and remove a
+block by its name. Its README, and example 13 at
+`/surface-examples/13`, show both
+([decision](decisions.md#a-block-embeds-a-component-through-its-structure),
+[decision](decisions.md#a-placed-block-is-a-resource)).
+
 ## Alters
 
 An alter says which resource or structure it applies to with `#[Alters]`
@@ -921,7 +1063,15 @@ Nothing an alter declares removes: it cannot take a key or a value away
 from the owner's declaration. A site policy that hides an owner's key
 for everyone is a later concept, not a verb here. What an alter may do
 is answer access, below, which locks or leaves out keys for an account
-or once the thing is known, as any access answer does.
+or once the thing is known, as any access answer does, and rule an
+owner's key out while a key of its own holds a value, which narrows.
+Example 14's module that manages keys rules the webhook's pasted key out
+once a managed key is chosen at its mount,
+`narrow('api_key')->when(Condition::present('key_id'))->doesNotApply()`.
+The owner's code still reads only its own keys, so the alter cannot hand
+it the managed key's value; an owner that needs it declares the managed
+key as a variant of its own ([decision](decisions.md#an-extension-is-a-variant-the-site-adds-or-an-alter),
+[ROADMAP](../ROADMAP.md) item 18).
 
 ### An alter's answer
 
@@ -1339,7 +1489,9 @@ over AJAX and the discard cascade drops input left by another variant. A
 payload carrying another variant's keys is refused by name
 (`presentation_settings.show_summary belongs to the list variant, but
 presentation chose grid.`); a stored value that does not fit a newly
-chosen variant falls back to that variant's defaults.
+chosen variant falls back to that variant's defaults, but a secret of
+another variant, which is kept beside them for the day its variant is
+chosen again ([decision](decisions.md#an-extension-is-a-variant-the-site-adds-or-an-alter)).
 
 ### Ports
 
@@ -1554,12 +1706,12 @@ first of these that applies:
    operation and hands it identity. Naming an operation the child does
    not declare is refused at build, naming the parent, the key and the
    operation. A context handed whole, `withChild('storage',
-   FieldStorageResource::edit($storage))`, is still taken as it is: the
+   FieldStorageResource::update($storage))`, is still taken as it is: the
    parent built it, so the child invokes no operation of its own through
    it, and no operation's permission is asked of it. Its access class
    still answers, below.
 2. **The child's operation with the parent's operation id.** Adding a
-   field invokes its storage's own `add`.
+   field invokes its storage's own `create`.
 3. **The child's default**, the one operation it marks
    `#[Operation(..., default: TRUE)]`. Two defaults on one class are
    refused when it is built.
@@ -1612,9 +1764,9 @@ and stated fixed ([A variant is open, locked or not
 offered](decisions.md#a-variant-is-open-locked-or-not-offered)).
 
 The test module's larder is the worked example: one spice rack resource
-attached twice, invoked through its `edit` at one key, matched by the
+attached twice, invoked through its `update` at one key, matched by the
 larder's own operation id, and through `restock`, which the larder's
-edit operation names, at the other, with an access class that answers
+update operation names, at the other, with an access class that answers
 open, locked or omitted by permission. Its `stock` operation hands both
 racks a context whole, where the access class answers the same and
 `restock`'s permission is not asked (`ChildOperationTest`).
@@ -1652,9 +1804,123 @@ another key, adds `FieldStorageResource`'s from
 the schema says and nothing more: its keys, their types and labels, and
 the field type's own default settings where their type fits. A string's
 `max_length` is `storage.settings.max_length` when the field is added,
-and `settings.max_length` on `data_surface:field.storage:edit`. The
+and `settings.max_length` on `data_surface:field.storage:update`. The
 catalog lists the declared variants per key, and says where the
 derived ones come from.
+
+### Variants from the site
+
+Some variants are the site's, not the code's: one per component a
+site's themes provide, one per layout its configuration lists. No class
+can be written for each, and each says what it holds already, in a
+JSON Schema. `attachVariants()` names a provider that lists them, each
+with its schema, and the reader writes each schema into a variant
+([Reading a schema](reading-a-schema.md)):
+
+```php
+// SpotlightResource, example 12
+$inputs->add('component', 'string', t('Component'), default: 'data_surface_examples:card')
+  ->setRequired(TRUE);
+$inputs->attachVariants('props', by: 'component', from: ComponentProps::class)
+  ->setLabel(t('Props'));
+
+// ComponentProps, the main module's, built by the class resolver
+final class ComponentProps implements VariantsFromSiteInterface {
+
+  public function variants(): VariantList {
+    $variants = (new VariantList())->addCacheTags(['config:core.extension']);
+    $components = $this->components->getDefinitions();
+    ksort($components);
+    foreach ($components as $id => $component) {
+      $variants->add((string) $id, (string) ($component['name'] ?? $id), self::props($component['props'] ?? []));
+    }
+    return $variants;
+  }
+
+}
+```
+
+Each class's `use` line: [Namespaces](concepts.md#namespaces).
+
+- **The provider** implements `VariantsFromSiteInterface`: `variants()`
+  answers a `VariantList`, per value of the deciding key its label and
+  the schema of what it chooses, an object in JSON Schema 2020-12 or an
+  older draft. It is built by the class resolver, and asked at every
+  build, as a provider of [keys from the site](#keys-that-come-from-the-site)
+  is, with the same rules for its cacheability: what it read is the
+  built resource's, a list with max-age 0 is refused, and so is one that
+  varies by the account.
+- **Each variant is a structure read from its schema**, its id
+  `<owner>.<key>.<value>` (`event.spotlight.props.data_surface_examples:card`),
+  built by the build step as a class is: its keys, their constraints,
+  its maps, children, variants and rules, what its schema says.
+- **Beside the classes.** Every `#[Variant]` at the key is a variant as
+  before, and wins for a value both name; the deciding key offers each
+  value under the provider's label, unless it declares a list of its
+  own, which narrows them as it narrows a class's.
+- **Stated as variants are.** Both documents write each variant as a
+  def and the key as `anyOf` of them, with one conditional per value;
+  the tool lists them, the form swaps the keys over AJAX, the React page
+  narrows locally, and a payload carrying another variant's keys is
+  refused by name: `props.align belongs to the data_surface_examples:hero
+  variant, but component chose data_surface_examples:card.`
+- **Past the site list limit, asked for.** While the provider lists at
+  most `data_surface.settings:site_list_limit` variants (20 as shipped),
+  both documents and the tool listing state each. Past it, the full
+  schema and the listing state the key open, marked `refine`, the
+  deciding key still listing every value; the schema for these answers
+  states the variant chosen, and the narrowing tool,
+  `data_surface:<resource>:<operation>:schema`, answers it to an agent
+  ([decision](decisions.md#a-budget-for-what-the-site-decides)).
+- **Storage.** The key is open in the config schema written from the
+  resource (`type: ignore`): which variants a site has is not the
+  code's, and the chosen variant holds the value to its own keys before
+  anything is written. A provider whose every variant is a structure its
+  code names says so, `ClosedVariantsInterface` and a static
+  `structures()`, and the key is then written as a class's variants are,
+  a type per value, whichever the site offers now.
+- **One value is fixed.** A deciding key whose variants offer one value,
+  and which declares no list of its own, is drawn as that value, not as a
+  select of one, and both documents state it as `const`, its label under
+  `x-surface.fixed`.
+
+The test module's poster reads three layouts, one in draft-04, beside a
+class that wins for the banner (`VariantsFromSiteTest`); example 12
+reads every single-directory component the site has. Example 14's mailer
+lists two structures of its own, a credential pasted or a key the site
+manages, the second only while the module that manages keys is on
+([decision](decisions.md#an-extension-is-a-variant-the-site-adds-or-an-alter)).
+
+A placed block is the case at scale. `data_surface_block`'s
+`block.placement` attaches its `settings` with
+`attachVariants('settings', by: 'plugin', from:
+BlockPluginStructures::class)`: one variant per block plugin the block
+layout offers. A plugin whose class names its settings with
+`#[UsesStructure]` is that structure, built as declared, which a
+provider says with `VariantList::addStructure($value, $label,
+$class)` in place of a schema; the component block's is one, its own
+variants, the components' props, inside it. Any other plugin is read
+from its config schema, `block.settings.<plugin id>`, written as JSON
+Schema for the reader. The keys every block has (its title, whether it
+shows, its theme, region, weight and status) are the resource's own, and
+its visibility a collection of conditions chosen the same way
+([decision](decisions.md#a-placed-block-is-a-resource)).
+
+Variants from the site nest. A schema a provider lists may hold
+variants of its own, a sibling's `const` choosing among objects, and
+those again: a component's slots each hold a component, whose own props
+and slots are variants of the component it names, three deep
+(`ComponentSlots`, beside `ComponentProps` at `slots`;
+[decision](decisions.md#a-slot-holds-text-a-component-or-components)).
+The same shape stands at many places in such a tree, so a provider hands
+the defs its entries share once, `VariantList::addDefs($defs)`, and an
+entry whose schema is a `$ref` into them is that def. Each def is one
+read structure, built once per request and context and held at every key
+it is attached at, so a site with hundreds of components builds a
+structure per def, not one per place a def is used. Each level counts
+against the site list limit by itself: on a site with 312 components,
+the props and slots are `refine` at every depth, and the documents hold
+the chosen component's defs alone.
 
 ### A child that cannot be listed
 
@@ -1782,6 +2048,12 @@ Each class's `use` line: [Namespaces](concepts.md#namespaces).
   max-age 0 is refused when the resource is built, and so is one that
   varies by the account: which keys there are is the site's, and who may
   change one is access.
+- **Past the site list limit.** A map of more keys than
+  `data_surface.settings:site_list_limit` (20 as shipped) is stated open
+  in the full schema and the tool listing, marked `refine`, its keys
+  named under `x-surface.entries` by id and label; the schema for these
+  answers states every key, and the narrowing tool answers it to an agent
+  ([decision](decisions.md#a-budget-for-what-the-site-decides)).
 - **A locked thing** (`add($id, $label, locked: TRUE)`) is held to what
   is stored: drawn fixed on the form, `readOnly` in both documents, locked
   in the tool listing, and a value posted for it is not taken, which the
@@ -1809,7 +2081,10 @@ Each class's `use` line: [Namespaces](concepts.md#namespaces).
 A deriver ([below](#derived-resources)) is for what is a resource or
 structure of its own: operations, storage, identity, or a use at many
 sites. Keys that only one resource asks for, one per thing, are this
-([decision](decisions.md#keys-that-come-from-the-site)).
+([decision](decisions.md#keys-that-come-from-the-site)). Where each
+thing chooses a group of keys of its own, a schema per thing, the
+spelling is [variants from the site](#variants-from-the-site):
+`attachVariants($key, by: $sibling, from: Provider::class)`.
 
 ### Ports on an entry
 
@@ -1872,8 +2147,8 @@ final class ContentEntityResources implements ResourceDeriverInterface, KnowsDer
           inputs: new ResourceCallable(self::class, 'defineInputs', $bound),
           identity: ['entity_type', 'bundle', 'id'],
           operations: [
-            new DerivedOperation('add', $this->t('Add @bundle', ['@bundle' => $label]), new ResourceCallable(self::class, 'add', $bound)),
-            new DerivedOperation('edit', $this->t('Edit @bundle', ['@bundle' => $label]), new ResourceCallable(self::class, 'edit', $bound), ['id' => 'entity:' . $entity_type_id]),
+            new DerivedOperation('create', $this->t('Add @bundle', ['@bundle' => $label]), new ResourceCallable(self::class, 'create', $bound)),
+            new DerivedOperation('update', $this->t('Edit @bundle', ['@bundle' => $label]), new ResourceCallable(self::class, 'update', $bound), ['id' => 'entity:' . $entity_type_id]),
           ],
           storage: ContentEntityStorage::class,
           access: ContentEntityAccess::class,

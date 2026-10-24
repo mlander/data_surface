@@ -196,6 +196,13 @@ final class DataSurfaceBuilder implements DataSurfaceBuilderInterface {
   protected array $mixins = [];
 
   /**
+   * What the frame as a whole is held to beyond its keys, in order.
+   *
+   * @var array<int, array>
+   */
+  protected array $frameConstraints = [];
+
+  /**
    * The wirings refinement edges came from, by target, then dependency.
    *
    * @var array<string, array<string, string>>
@@ -387,6 +394,15 @@ final class DataSurfaceBuilder implements DataSurfaceBuilderInterface {
   /**
    * {@inheritdoc}
    */
+  public function constrainFrame(array $schema): static {
+    $this->assertMutable();
+    $this->frameConstraints[] = $schema;
+    return $this;
+  }
+
+  /**
+   * {@inheritdoc}
+   */
   public function extendChoices(string $name, array $choices, string $contributor): static {
     $this->assertMutable();
     $definition = $this->named($name);
@@ -491,6 +507,12 @@ final class DataSurfaceBuilder implements DataSurfaceBuilderInterface {
           $named[$id] = $labels[$id] ?? $id;
         }
         (new ChoiceSet('LabeledChoice', $ids, $named))->applyTo($deciding);
+      }
+      if (count($ids) === 1) {
+        // One value to choose is none: the key is that value, fixed.
+        // Decision: see
+        // docs/decisions.md#an-extension-is-a-variant-the-site-adds-or-an-alter.
+        DefinitionMetadata::setOneVariant($deciding);
       }
     }
     else {
@@ -799,6 +821,7 @@ final class DataSurfaceBuilder implements DataSurfaceBuilderInterface {
         held: $held,
         runtimeAccess: $this->runtimeAccessWhole ? array_map('strval', array_keys($definitions)) : array_values(array_intersect($this->runtimeAccess, array_keys($definitions))),
         lockReasons: array_intersect_key($this->lockReasons, $definitions),
+        frameConstraints: $this->frameConstraints,
       ),
       $this->cacheability,
       DefinitionMap::fromArrays(definitions: $outputs),

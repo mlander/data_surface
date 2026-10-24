@@ -143,7 +143,9 @@ counts the breaking changes made to its stored values, the contract's
 the changes made to how every document is spelled and laid out, whatever
 it describes ([decision](decisions.md#contract-2)). Contract 1 is what
 the module served until 2026-10-20, and what every document was before
-it had a number; today's is 2 (`ContractEmitter::CONTRACT`).
+it had a number, and contract 2 until 2026-10-22; today's is 3
+(`ContractEmitter::CONTRACT`), which changed the HTTP door and kept the
+documents' spelling ([decision](decisions.md#contract-3-the-operation-is-the-method)).
 
 **What raises it.** A change to how documents are spelled or laid out
 that a client reading the old spelling would misread: a key or a marker
@@ -156,9 +158,9 @@ Every wire change waiting for a version moves together, once, so a
 client moves once.
 
 **How a server states it.** Both documents carry it first under the top
-`x-surface`, `"contract": 2`, and every answer of the five
-`/surface-api` endpoints that is not an error carries the response header
-`Contract-Version: 2`, so a client can tell before it reads a body. A
+`x-surface`, `"contract": 3`, and every answer of the `/surface-api`
+API carries the response header `Contract-Version: 3`, so a client can
+tell before it reads a body. A
 document that states none is of contract 1.
 
 **What a client does.** It reads the header, or the document's
@@ -289,7 +291,7 @@ never more lenient than it can show. A required key added with no
 default is judged by the kind of operation the document describes
 (`x-surface.operation.kind`): a note in an update or a read, breaking in
 a create and in a structure described alone, so one declaration can be a
-note on its `configure` and breaking on its `add`, each reported on its
+note on its `configure` and breaking on its `create`, each reported on its
 own document. A change to a key's union of its
 variants is a note, since the conditionals that state each variant are
 judged themselves, and so is one to `$id`, `rules` or `within`, which
@@ -316,7 +318,10 @@ it with no reason asked.
 fails on a breaking change that is neither versioned nor allowed, and
 on a declaration with no baseline. Compatible changes pass; the
 baseline is the promise last made, and it is pinned again when a change
-is accepted.
+is accepted. An adopter gets the same test, per resource, from
+`ResourceTestBase`: `$baselines` names its directory, and
+`DATA_SURFACE_BASELINES_WRITE=1` pins today's ([Testing a
+resource](testing-a-resource.md#the-baselines)).
 
 **The command.**
 
@@ -367,6 +372,7 @@ an alter a site installs, which only that site's own baselines cover.
 ## See also
 
 - [Decisions: a resource evolves in the open](decisions.md#a-resource-evolves-in-the-open)
+- [Testing a resource](testing-a-resource.md), the contract baseline among an adopter's checks
 - [The served contract](served-contract.md), whose full schema the lint compares
 - [Value semantics](semantics.md), which says what a client asked for
 - [Storage](storage.md), which owns the layout and will own the ledger

@@ -6,10 +6,13 @@ namespace Drupal\data_surface_tool;
 
 use Drupal\Core\Cache\Cache;
 use Drupal\Core\Session\AnonymousUserSession;
+use Drupal\Core\Extension\ModuleHandlerInterface;
 use Drupal\Core\StringTranslation\StringTranslationTrait;
 use Drupal\Core\StringTranslation\TranslatableMarkup;
 use Drupal\Core\StringTranslation\TranslationInterface;
 use Drupal\Core\TypedData\DataDefinitionInterface;
+use Drupal\data_surface\Computed;
+use Drupal\data_surface\Contract\SiteListBudget;
 use Drupal\data_surface\DataSurfaceInterface;
 use Drupal\data_surface\Pipeline\Outbound;
 use Drupal\data_surface\Resource\OperationContext;
@@ -99,6 +102,11 @@ final class OperationInputs {
   public const VALUES = 'values';
 
   /**
+   * The output carrying the schema for the values sent.
+   */
+  public const SCHEMA = 'schema';
+
+  /**
    * The input asking for a dry run.
    */
   public const DRY_RUN = 'dry_run';
@@ -183,12 +191,20 @@ final class OperationInputs {
    *   The converter from a data surface to the Tool API's definitions.
    * @param \Drupal\Core\StringTranslation\TranslationInterface $string_translation
    *   The string translation service.
+   * @param \Drupal\Core\Extension\ModuleHandlerInterface|null $moduleHandler
+   *   The module handler, which says whether the site serves the API a
+   *   reference key's lookup is on.
+   * @param \Drupal\data_surface\Contract\SiteListBudget|null $budget
+   *   How many entries of a list the site decides a listing spells out,
+   *   which says whether an operation has a narrowing tool.
    */
   public function __construct(
     protected readonly ResourcesInterface $resources,
     protected readonly OperationArguments $operationArguments,
     protected readonly InputDefinitions $inputDefinitions,
     TranslationInterface $string_translation,
+    protected readonly ?ModuleHandlerInterface $moduleHandler = NULL,
+    protected readonly ?SiteListBudget $budget = NULL,
   ) {
     $this->stringTranslation = $string_translation;
   }
@@ -212,7 +228,11 @@ final class OperationInputs {
   public function inputs(ResourceDefinition $resource, OperationDefinition $operation): array {
     $neutral = $this->neutral($resource, $operation, TRUE);
     $inputs = $this->parameterInputs($resource, $operation, $neutral);
-    $inputs[self::VALUES] = $this->declaredValues($resource, $operation, $neutral, declared: TRUE);
+    // A delete takes no values: the parameters name what it removes.
+    // Decision: see docs/decisions.md#a-placed-block-is-a-resource.
+    if ($operation->kind() !== OperationDefinition::DELETE) {
+      $inputs[self::VALUES] = $this->declaredValues($resource, $operation, $neutral, declared: TRUE);
+    }
     if ($operation->readOnly) {
       // Nothing is written, so there is nothing to rehearse.
       // Decision: see docs/decisions.md#an-operation-states-how-it-behaves.
@@ -221,7 +241,9 @@ final class OperationInputs {
     $inputs[self::DRY_RUN] = new InputDefinition(
       data_type: 'boolean',
       label: $this->t('Dry run'),
-      description: $this->t('Accept, validate and prepare the values without writing anything.'),
+      description: $operation->kind() === OperationDefinition::DELETE
+        ? $this->t('Rehearse the removal without removing anything.')
+        : $this->t('Accept, validate and prepare the values without writing anything.'),
       required: FALSE,
       default_value: FALSE,
     );
@@ -406,12 +428,12 @@ final class OperationInputs {
     if ($operation->needsNothing()) {
       $context = $this->resources->operation($resource->name(), $operation->id);
       $built = $this->listed($resource, $context, $declared);
-      $map = $this->map($resource, $built, $this->knownIdentity($resource, $context), $operation);
+      $map = $this->map($resource, $built, $this->knownIdentity($resource, $context), $operation, !$input);
     }
     else {
       // Decision: see docs/decisions.md#identity-before-the-parameters.
       $built = $neutral ?? $this->listed($resource, new OperationContext($operation->id), $declared);
-      $map = $this->map($resource, $built, $this->suppliedIdentity($resource, $operation), $operation);
+      $map = $this->map($resource, $built, $this->suppliedIdentity($resource, $operation), $operation, !$input);
     }
     if ($input) {
       // Decision: see docs/decisions.md#a-refusal-names-what-it-depends-on.
@@ -513,6 +535,47 @@ final class OperationInputs {
   }
 
   /**
+   * Answers whether an operation has a narrowing tool.
+   *
+   * It has one when its declared listing has a key whose list the site
+   * decides past the budget (SiteListBudget::anyOver()), at any depth: a
+   * key the listing states open, whose keys only the schema for some
+   * values says. A resource with none adds no tool.
+   *
+   * Decision: see docs/decisions.md#a-budget-for-what-the-site-decides.
+   *
+   * @param \Drupal\data_surface\ResourceBuild\ResourceDefinition $resource
+   *   The resource.
+   * @param \Drupal\data_surface\ResourceBuild\OperationDefinition $operation
+   *   The operation.
+   *
+   * @return bool
+   *   TRUE when `<resource>:<operation>:schema` is derived.
+   */
+  public function narrows(ResourceDefinition $resource, OperationDefinition $operation): bool {
+    if ($this->budget === NULL || $operation->kind() === OperationDefinition::DELETE) {
+      return FALSE;
+    }
+    $context = $operation->needsNothing() ? $this->resources->operation($resource->name(), $operation->id) : new OperationContext($operation->id);
+    return $this->budget->anyOver($this->listed($resource, $context, TRUE));
+  }
+
+  /**
+   * Names an operation's narrowing tool.
+   *
+   * @param \Drupal\data_surface\ResourceBuild\ResourceDefinition $resource
+   *   The resource.
+   * @param \Drupal\data_surface\ResourceBuild\OperationDefinition $operation
+   *   The operation.
+   *
+   * @return string
+   *   `data_surface:<resource id>:<operation id>:schema`, the plugin id.
+   */
+  public static function narrowingTool(ResourceDefinition $resource, OperationDefinition $operation): string {
+    return self::TOOL . ':' . $resource->id . ':' . $operation->id . ':' . self::SCHEMA;
+  }
+
+  /**
    * Answers whether an operation changes a thing that exists.
    *
    * Whether it does not create, as its attribute says, the same reading
@@ -542,7 +605,7 @@ final class OperationInputs {
    *   The operation.
    *
    * @return string
-   *   OperationDefinition::CREATE, ::UPDATE or ::READ.
+   *   OperationDefinition::CREATE, ::UPDATE, ::READ or ::DELETE.
    */
   public function kind(ResourceDefinition $resource, OperationDefinition $operation): string {
     return $operation->kind();
@@ -652,22 +715,67 @@ final class OperationInputs {
    * @param \Drupal\data_surface\ResourceBuild\OperationDefinition|null $operation
    *   The operation, whose tool's description may say once what every
    *   key would; NULL when it is not known.
+   * @param bool $computed
+   *   TRUE to keep the computed keys, which the read answers; the write
+   *   takes none, so its `values` leaves them out.
+   *   Decision: see
+   *   docs/decisions.md#a-computed-key-is-a-pure-function-of-its-sources.
    *
    * @return \Drupal\tool\TypedData\MapInputDefinition
    *   The map, required when any of its properties is.
    */
-  protected function map(ResourceDefinition $resource, DataSurfaceInterface $built, array $known, ?OperationDefinition $operation = NULL): MapInputDefinition {
+  protected function map(ResourceDefinition $resource, DataSurfaceInterface $built, array $known, ?OperationDefinition $operation = NULL, bool $computed = FALSE): MapInputDefinition {
     $this->listedTags = Cache::mergeTags($this->listedTags, $built->getCacheTags());
     $map = $this->inputDefinitions->fromSurface(
       $built,
       $this->t('@resource values', ['@resource' => $resource->id]),
       $this->t('The values, as the @resource resource describes them: every key it takes that the operation does not already know, including those other modules add, with its label, its meaning and the values it allows.', ['@resource' => $resource->id]),
       runtimeAccessSaidOnce: $operation !== NULL && $this->runtimeAccessWhole($resource, $operation),
+      narrowing: $operation === NULL ? NULL : static::narrowingTool($resource, $operation),
     );
+    $this->inputDefinitions->withLookups($map, $built, $operation === NULL ? NULL : $this->lookup($resource, $operation));
+    $this->listedTags = Cache::mergeTags($this->listedTags, $this->inputDefinitions->takeListTags());
     $properties = array_diff_key($map->getPropertyDefinitions(), array_flip($known));
+    if (!$computed) {
+      $properties = array_filter($properties, static fn (string $name): bool => Computed::of($built->getDefinition($name)) === NULL || $built->getDefinitions()->isLocked($name), ARRAY_FILTER_USE_KEY);
+    }
     $map->setPropertyDefinitions($properties);
     $map->setRequired(array_filter($properties, static fn (DataDefinitionInterface $property): bool => $property->isRequired()) !== []);
     return $map;
+  }
+
+  /**
+   * Names the resource's lookup, where the site serves its API.
+   *
+   * `GET /surface-api/{resource}:lookup`, or for an operation about one
+   * thing `/surface-api/{resource}/{<parameter>}:lookup`, as
+   * data_surface_react serves it.
+   *
+   * Decision: see
+   * docs/decisions.md#a-reference-is-an-id-with-a-list-the-site-decides-listed-or-looked-up.
+   *
+   * @param \Drupal\data_surface\ResourceBuild\ResourceDefinition $resource
+   *   The resource.
+   * @param \Drupal\data_surface\ResourceBuild\OperationDefinition $operation
+   *   The operation.
+   *
+   * @return string|null
+   *   The path, or NULL when data_surface_react is not on.
+   */
+  protected function lookup(ResourceDefinition $resource, OperationDefinition $operation): ?string {
+    if (!$this->moduleHandler?->moduleExists('data_surface_react')) {
+      return NULL;
+    }
+    $path = '/surface-api/' . $resource->id;
+    if ($resource->identity !== [] && !$operation->creates && !$operation->needsNothing()) {
+      foreach ($operation->parameters as $parameter) {
+        if ($parameter->optional) {
+          break;
+        }
+        $path .= '/{' . $parameter->name . '}';
+      }
+    }
+    return $path . ':lookup';
   }
 
   /**
@@ -708,11 +816,11 @@ final class OperationInputs {
       ),
       self::CHANGES => new ListOutputDefinition(
         label: $this->t('Changes'),
-        description: $this->t('The dotted path of each stored value the write changed, or a dry run would change, a list as a whole. Empty when it changes nothing, and then nothing is saved: writing back what the read tool returned changes nothing.'),
+        description: $this->t('The JSON Pointer of each stored value the write changed, or a dry run would change, a list as a whole. Empty when it changes nothing, and then nothing is saved: writing back what the read tool returned changes nothing.'),
         item_definition: new OutputDefinition(
           data_type: 'string',
           label: $this->t('Path'),
-          description: $this->t('A dotted path in the values.'),
+          description: $this->t('A JSON Pointer into the values.'),
         ),
       ),
       self::VALUES => new OutputDefinition(
@@ -722,19 +830,23 @@ final class OperationInputs {
       ),
       self::VIOLATIONS => $this->entries(
         $this->t('Violations'),
-        $this->t('Each refusal: the dotted path of the key refused (empty for a refusal of the whole call), a stable code to branch on, and the message, which names a key it depends on by its path and a value by what is sent.'),
+        $this->t('Each refusal: the JSON Pointer of the key refused (empty for a refusal of the whole call), a stable code to branch on, and the message, which names a key it depends on by its path and a value by what is sent.'),
       ),
       self::NOTES => $this->entries(
         $this->t('Values not taken'),
-        $this->t('Each value sent for a key that is locked, by its dotted path, code locked, with why it kept what it holds. The call succeeded, but not as sent.'),
+        $this->t('Each value sent for a key that is locked, by its JSON Pointer, code locked, with why it kept what it holds. The call succeeded, but not as sent.'),
       ),
       self::STALE => $this->entries(
         $this->t('Values no longer available'),
-        $this->t('Each stored value kept that may no longer be chosen, by its dotted path, code stale, with what to do and the value kept. The call succeeded; choose a new value when you can.'),
+        $this->t('Each stored value kept that may no longer be chosen, by its JSON Pointer, code stale, with what to do and the value kept. The call succeeded; choose a new value when you can.'),
         TRUE,
       ),
     ];
-    if (!$resource->hasOutputs()) {
+    // An operation that takes the keys of a structure answers that
+    // structure's outputs.
+    // Decision: see
+    // docs/decisions.md#a-listing-is-a-read-only-operation-with-outputs-a-reorder-is-an-update-over-the-collection.
+    if (!$resource->hasOutputs() && $operation->values === NULL) {
       return $outputs;
     }
     $built = $this->listed($resource, new OperationContext($operation->id), TRUE);
@@ -756,7 +868,7 @@ final class OperationInputs {
    */
   protected function entries(TranslatableMarkup $label, TranslatableMarkup $description, bool $stored = FALSE): ListOutputDefinition {
     $properties = [
-      'path' => new OutputDefinition(data_type: 'string', label: $this->t('Path'), description: $this->t('A dotted path in the values; empty for the whole call.')),
+      'path' => new OutputDefinition(data_type: 'string', label: $this->t('Path'), description: $this->t('A JSON Pointer into the values; empty for the whole call.')),
       'code' => new OutputDefinition(data_type: 'string', label: $this->t('Code'), description: $this->t('A stable code: the same whatever the language and whatever the message says.')),
       'message' => new OutputDefinition(data_type: 'string', label: $this->t('Message'), description: $this->t('What to say about it, as plain text.')),
     ];
@@ -799,6 +911,7 @@ final class OperationInputs {
     $description = match ($operation->kind()) {
       OperationDefinition::READ => $this->t('@description Read only: nothing is written; a key left out is checked at its current value.', $arguments),
       OperationDefinition::CREATE => $this->t('@description Create: a key left out takes its default, and every key marked required must be sent.', $arguments),
+      OperationDefinition::DELETE => $this->t('@description Delete: send only what names it; the values it held are answered, and a dry run removes nothing.', $arguments),
       default => $this->t('@description Update: send only the keys to change; a key left out keeps its value, null clears it, and values {} changes nothing. The read tool returns the current values.', $arguments),
     };
     return $this->runtimeAccessWhole($resource, $operation) ? $this->withRuntimeAccessWhole($description) : $description;
@@ -884,6 +997,73 @@ final class OperationInputs {
       '@needs' => $this->needs($operation),
     ]);
     return $this->runtimeAccessWhole($resource, $operation) ? $this->withRuntimeAccessWhole($description) : $description;
+  }
+
+  /**
+   * Gets the inputs of the narrowing tool: its parameters, and `values`.
+   *
+   * `values` is open and optional: whatever the caller has so far, read
+   * as a narrowing reads it, a key the resource does not declare left out.
+   *
+   * Decision: see docs/decisions.md#a-budget-for-what-the-site-decides.
+   *
+   * @param \Drupal\data_surface\ResourceBuild\ResourceDefinition $resource
+   *   The resource.
+   * @param \Drupal\data_surface\ResourceBuild\OperationDefinition $operation
+   *   The operation.
+   *
+   * @return array<string, \Drupal\tool\TypedData\InputDefinitionInterface>
+   *   One input per parameter, exactly as the write tool declares it, then
+   *   `values`.
+   */
+  public function schemaInputs(ResourceDefinition $resource, OperationDefinition $operation): array {
+    return $this->parameters($resource, $operation) + [
+      self::VALUES => new MapInputDefinition(
+        label: $this->t('What you have so far'),
+        description: $this->t('As the write tool takes them: a key that chooses (a component, a plugin) decides which keys the answer states beside it. Any key may be left out; {} asks for the schema as the operation opens.'),
+        required: FALSE,
+        property_definitions: [],
+      ),
+    ];
+  }
+
+  /**
+   * Gets what the narrowing tool answers: the schema, and the values.
+   *
+   * @return array<string, \Drupal\tool\TypedData\OutputDefinitionInterface>
+   *   `schema` and `values`, each an open map.
+   */
+  public function schemaOutputs(): array {
+    return [
+      self::SCHEMA => new MapOutputDefinition(
+        label: $this->t('Schema for these values'),
+        description: $this->t('JSON Schema 2020-12 for the values sent: each key a choice decides stated for the choice made, its keys and what each allows, as POST /surface-api/{resource}/schema answers it, with no widget hints.'),
+        property_definitions: [],
+      ),
+      self::VALUES => new MapOutputDefinition(
+        label: $this->t('Values so far'),
+        description: $this->t('What the schema describes: what was sent, over what is stored and the defaults, with every computed key computed; an answer a new choice no longer allows is dropped. A secret is null.'),
+        property_definitions: [],
+      ),
+    ];
+  }
+
+  /**
+   * Gets the narrowing tool's description.
+   *
+   * @param \Drupal\data_surface\ResourceBuild\ResourceDefinition $resource
+   *   The resource.
+   * @param \Drupal\data_surface\ResourceBuild\OperationDefinition $operation
+   *   The operation.
+   *
+   * @return \Drupal\Core\StringTranslation\TranslatableMarkup
+   *   The description.
+   */
+  public function schemaDescription(ResourceDefinition $resource, OperationDefinition $operation): TranslatableMarkup {
+    return $this->t('Answers the schema of @label for the values you have so far, and writes nothing. @needs Some keys of @label take their list from the site and have too many to list, so the write tool lists them open: choose the key that decides them, send your values here, and read the keys the choice offers under schema. Send the values again when a choice changes.', [
+      '@label' => self::operationLabel($operation),
+      '@needs' => $this->needs($operation),
+    ]);
   }
 
   /**

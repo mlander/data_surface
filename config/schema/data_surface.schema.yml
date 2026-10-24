@@ -1,0 +1,18 @@
+data_surface.settings:
+  type: config_object
+  label: 'Data Surface settings'
+  constraints:
+    FullyValidatable: ~
+  mapping:
+    reference_enum_limit:
+      type: integer
+      label: 'Most targets a reference key lists as its options'
+      constraints:
+        Range:
+          min: 0
+    site_list_limit:
+      type: integer
+      label: 'Most entries of a list the site decides that a document spells out'
+      constraints:
+        Range:
+          min: 0

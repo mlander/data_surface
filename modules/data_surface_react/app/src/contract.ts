@@ -7,12 +7,12 @@
 /**
  * The contract version this app reads.
  *
- * Both documents state theirs in `x-surface.contract` at the top of
- * `schema`, and every answer of the five endpoints in its
- * `Contract-Version` header. A document of any other version is refused,
- * never read as if it were this one.
+ * Both documents state theirs in `x-surface.contract` at their schema's
+ * top, and every answer of the API in its `Contract-Version` header. A
+ * document of any other version is refused, never read as if it were
+ * this one.
  */
-export const CONTRACT = 2;
+export const CONTRACT = 3;
 
 /** A document or an answer of a contract version this app does not read. */
 export class ContractRefused extends Error {
@@ -29,11 +29,17 @@ export class ContractRefused extends Error {
  * said nothing of its version.
  */
 export function assertContract<T extends { schema?: Schema | null }>(document: T): T {
-  const stated = document?.schema?.['x-surface']?.contract;
+  assertSchema(document?.schema);
+  return document;
+}
+
+/** Refuses a schema, the full schema as served, of a contract this app does not read. */
+export function assertSchema<T extends Schema | null | undefined>(schema: T): T {
+  const stated = schema?.['x-surface']?.contract;
   if (stated !== CONTRACT) {
     throw new ContractRefused(stated === undefined || stated === null ? '1' : String(stated));
   }
-  return document;
+  return schema;
 }
 
 export type Widget =
@@ -48,7 +54,20 @@ export type Widget =
   | 'email'
   | 'fieldset'
   | 'variants'
-  | 'list';
+  | 'list'
+  | 'fixed'
+  | 'autocomplete';
+
+/**
+ * What a key that refers to an entity refers to (`x-surface.reference`):
+ * one entity type, and the bundles it is narrowed to; or, for a bare
+ * reference's id, the sibling whose value is its entity type.
+ */
+export interface Reference {
+  entityType?: string;
+  bundles?: string[];
+  by?: string;
+}
 
 export interface EmptyOption {
   show: boolean;
@@ -97,10 +116,21 @@ export interface Extension {
   checkedOnServer?: { constraint: string; message: string }[];
   /** A Regex's own message: how a person is told what `pattern` allows. */
   patternMessage?: string;
+  /** On a key that refers to an entity: what it refers to. Its value is the id. */
+  reference?: Reference;
+  /**
+   * On a computed key, beside `readOnly`: the keys it is computed from, and
+   * whether once, when the thing is created, or again whenever one of them
+   * changes. Nobody types it: the page shows what the server's narrowing
+   * answers for it and never sends it.
+   */
+  computed?: { from: string[]; when: 'create' | 'change' };
   /** On an object that only groups each module's fieldset: draw nothing around them. */
   group?: boolean;
   /** On a module's fieldset inside a group: draw it right after this sibling of the group instead. */
   after?: string;
+  /** On a deciding key whose variants offer one value, its `const`: the label that value is offered as. */
+  fixed?: string;
   /**
    * The key's static refiners watch keys that each offer a list, and what
    * they answer for every value is stated as conditionals on the frame:
@@ -109,7 +139,7 @@ export interface Extension {
   enumerated?: boolean;
   /**
    * Static, but not stated: a watched key cannot be listed, or the
-   * combinations exceed the cap. Narrowed for values by /refine.
+   * combinations exceed the cap. Narrowed for values by the server's narrowing.
    */
   refine?: boolean;
   /**
@@ -226,6 +256,13 @@ export interface Schema {
 
 export type Values = Record<string, unknown>;
 
+/**
+ * The envelope: the schema for the values, and the values.
+ *
+ * Every path in it is dotted here (`ticket.price`): the API writes each
+ * as a JSON Pointer, and api.ts reads it back. The stored values'
+ * fingerprint is no member of it: it is the answer's `ETag`.
+ */
 export interface Contract {
   resource: string;
   operation: string | null;
@@ -234,8 +271,9 @@ export interface Contract {
   values: Values;
   stale: string[];
   outputs?: Schema;
-  /** The stored values' fingerprint, on a GET and a submit's contract. */
-  fingerprint?: string | null;
+  /** One note per stale path, code `stale`. */
+  notes?: Violation[];
+  /** On a narrowing: each answer the new choices orphaned. */
   discarded?: string[];
 }
 
@@ -252,9 +290,10 @@ export interface StaleValue extends Violation {
 }
 
 /**
- * The one result shape every door answers a run in (ResultDocument):
- * /validate answers exactly this, the accepted values as the read tool
- * would answer them (no secret, nothing hidden).
+ * The one result shape every door answers a run in (ResultDocument),
+ * the accepted values as the read tool would answer them (no secret,
+ * nothing hidden). A refusal arrives as problem details, which api.ts
+ * reads back into this shape.
  */
 export interface Validation {
   /** Nothing was refused. */
@@ -280,11 +319,13 @@ export interface Created {
   parameters: Record<string, string | number>;
 }
 
-/** What /submit answers: the result shape, and, when written, the fresh contract. */
+/** What a write answers: the result shape, and, when written, the fresh contract. */
 export interface Submission extends Validation {
   outputs: Values;
   contract: Contract | null;
   created: Created | null;
+  /** A dry run says it was one. */
+  'x-surface-dry-run'?: boolean;
 }
 
 /** The JSON type a schema is, null aside. */
@@ -1066,6 +1107,12 @@ export function watchedPaths(schema: Schema, values: Values, prefix = ''): Set<s
     for (const dependency of property['x-surface']?.dependsOn ?? []) {
       watched.add(prefix + dependency);
     }
+    // What a computed key is computed from: no dependent the full schema
+    // states, so a change of one is narrowed by the server, which answers
+    // the value it computes.
+    for (const source of property['x-surface']?.computed?.from ?? []) {
+      watched.add(prefix + source);
+    }
     const nested = values[name];
     if (property['x-surface']?.list && property.items !== undefined && Array.isArray(nested)) {
       // Each item of a collection is a frame of its own, under its delta.
@@ -1083,6 +1130,23 @@ export function watchedPaths(schema: Schema, values: Values, prefix = ''): Set<s
     }
   }
   return watched;
+}
+
+/**
+ * The values to send: every key but a computed one, which nobody types.
+ *
+ * The server computes it from the keys it is computed from as they are
+ * sent, so a value the page holds for it, from a narrowing asked before the
+ * last change, is never sent and refused.
+ */
+export function withoutComputed(schema: Schema, values: Values): Values {
+  const sent: Values = { ...values };
+  for (const [name, property] of Object.entries(schema.properties ?? {})) {
+    if (property['x-surface']?.computed !== undefined) {
+      delete sent[name];
+    }
+  }
+  return sent;
 }
 
 export function isObject(value: unknown): value is Values {
@@ -1120,16 +1184,16 @@ export function fieldId(path: string): string {
 //
 // The full schema states every dependency that can be listed as a
 // conditional on the frame it sits in, and marks the rest: `refine` (a
-// static rule it could not list, which /refine runs for values) and
+// static rule it could not list, which the server's narrowing runs for values) and
 // `live` (a rule only the server can apply). So a change whose dependents are all stated can be narrowed
 // in the page, from the full schema, by the module's own rules; a change
-// with a `refine` or `live` dependent is asked of /refine. The page's
+// with a `refine` or `live` dependent is asked of the server. The page's
 // answer must be the server's: the same discard and orphan rule
 // (DataSurfaceFormBuilder::settle()), the same reading of a select
 // (ContractEmitter::property()), keyword for keyword.
 
 /** Why a change was asked of the server rather than narrowed here. */
-export type Marker = 'live' | 'refine' | 'access' | 'stored' | 'unsettled' | 'pending';
+export type Marker = 'live' | 'refine' | 'access' | 'stored' | 'computed' | 'unsettled' | 'pending';
 
 /** A change the page cannot narrow by itself, and the key that says why. */
 export class Unsettled extends Error {
@@ -1180,6 +1244,7 @@ export function narrowingStatus(narrowed: Narrowed): string {
     refine: 'depends on a rule to refine with values',
     access: 'has access only the server decides',
     stored: 'stands for a stored value only the server holds',
+    computed: 'is computed on the server',
     unsettled: 'could not be narrowed here',
     pending: 'changed while an earlier change was being asked',
   };
@@ -1192,14 +1257,21 @@ export function narrowingStatus(narrowed: Narrowed): string {
  * Every key that depends on the changed one, transitively, is found
  * through `dependsOn`; one marked `refine` or `live`, one inside a
  * part that is, or one standing for a stored value the page never saw,
- * sends the change to /refine. Otherwise the change is settled here, the
- * way /refine settles it: an answer the new choices orphan is dropped and
+ * sends the change to the server. Otherwise the change is settled here, the
+ * way the server's narrowing settles it: an answer the new choices orphan is dropped and
  * falls back to what is stored, a stored value the edit orphaned is held
  * unanswered and listed stale, and every key is read from the full
  * schema's conditionals for the values that result. Anything the
  * resolver cannot settle is asked rather than guessed.
  */
 export function narrow(request: Narrowing): Narrowed {
+  // A key computed from the one changed: what it holds is the server's to
+  // compute, which its narrowing answers.
+  for (const [name, property] of Object.entries(request.full.properties ?? {})) {
+    if (property['x-surface']?.computed?.from.includes(request.changed)) {
+      return { local: false, key: name, marker: 'computed' };
+    }
+  }
   try {
     const found = dependents(request.full, request.values, request.changed);
     if (found.names.length === 0) {

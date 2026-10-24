@@ -7,6 +7,7 @@ namespace Drupal\data_surface\ResourceBuild;
 use Drupal\Core\Cache\Cache;
 use Drupal\Core\Cache\CacheBackendInterface;
 use Drupal\Core\DependencyInjection\ClassResolverInterface;
+use Drupal\Core\Session\AccountInterface;
 use Drupal\data_surface\Hook\ResourcePluginHooks;
 use Drupal\data_surface\Resource\Attribute\Alters;
 use Drupal\data_surface\Resource\Attribute\DerivesResources;
@@ -19,6 +20,8 @@ use Drupal\data_surface\Resource\Attribute\Structure;
 use Drupal\data_surface\Resource\Attribute\Variant;
 use Drupal\data_surface\Resource\DerivedOperation;
 use Drupal\data_surface\Resource\OperationContext;
+use Drupal\data_surface\Reference\EntityReferenceStructure;
+use Drupal\data_surface\Resource\ResourceCallable;
 use Drupal\data_surface\Resource\DefinesOutputsInterface;
 use Drupal\data_surface\Resource\AltersAccessInterface;
 use Drupal\data_surface\Resource\AltersInputsInterface;
@@ -132,6 +135,17 @@ final class ResourceRegistry {
    * @var array<string, array{resources: array<string, \Drupal\data_surface\ResourceBuild\ResourceDefinition>, shapes: array<class-string, \Drupal\data_surface\ResourceBuild\ShapeDefinition>}>
    */
   protected array $provisional = [];
+
+  /**
+   * The structures read from a schema document, by the name each is asked by.
+   *
+   * Kept for the life of this service and listed by nothing: no catalog,
+   * baseline or tool sees them. Each is registered again, under the same
+   * name, whenever what reads it is built.
+   *
+   * @var array<string, \Drupal\data_surface\ResourceBuild\ResourceDefinition>
+   */
+  protected array $read = [];
 
   /**
    * How discovery was read in this request, for a performance budget.
@@ -553,6 +567,110 @@ final class ResourceRegistry {
   }
 
   /**
+   * Gets the structures read from a schema document in this request.
+   *
+   * What the builds so far registered (defineRead()), which nothing else
+   * lists: the site catalog builds every operation first, then lists
+   * these, so a structure a provider or a document supplies is on the
+   * map too.
+   *
+   * @return array<string, \Drupal\data_surface\ResourceBuild\ResourceDefinition>
+   *   The definitions, by the name each is built by, `schema:<id>:<hash>`,
+   *   sorted.
+   *
+   * @internal
+   *   For the site catalog.
+   */
+  public function getReadDefinitions(): array {
+    $read = array_filter($this->read, static fn (ResourceDefinition $definition): bool => str_starts_with((string) $definition->readAs, 'schema:'));
+    ksort($read);
+    return $read;
+  }
+
+  /**
+   * Registers a structure read from a schema document, to be built by name.
+   *
+   * A document's object at a key, a def it refers to, a variant it states
+   * or one a provider supplies is a structure with no class: its inputs
+   * are what SchemaReader reads from the document. It is asked for by the
+   * name this answers, `schema:<id>:<hash>`, which the hash of what it
+   * was read from keeps the same for the same document and apart for
+   * another one claiming the same id; its id is the document's own.
+   *
+   * Decision: see docs/decisions.md#a-schema-can-be-read-back-into-a-structure.
+   *
+   * @param string $id
+   *   The id it has in the document: a def's key, or `<owner>.<key>`.
+   * @param string $module
+   *   The module of what reads it, which it is reported under.
+   * @param \Drupal\data_surface\Resource\ResourceCallable $inputs
+   *   What fills its blueprint.
+   * @param string $hash
+   *   A hash of what it is read from.
+   *
+   * @return string
+   *   The name it is built by.
+   */
+  public function defineRead(string $id, string $module, ResourceCallable $inputs, string $hash): string {
+    $name = 'schema:' . $id . ':' . $hash;
+    $this->read[$name] ??= new ResourceDefinition(
+      class: NULL,
+      id: $id,
+      module: $module,
+      identity: [],
+      storage: NULL,
+      access: NULL,
+      refiners: [],
+      inputs: $inputs,
+      kind: ResourceDefinition::STRUCTURE,
+      readAs: $name,
+    );
+    return $name;
+  }
+
+  /**
+   * Registers the two parts of a bare `entity` key, for one key's filter.
+   *
+   * Like a structure read from a schema, listed by nothing and built by
+   * name: its inputs EntityReferenceStructure::fill() with the filter, its
+   * refiner EntityReferenceStructure::id().
+   *
+   * Decision: see
+   * docs/decisions.md#a-reference-is-an-id-with-a-list-the-site-decides-listed-or-looked-up.
+   *
+   * @param string $id
+   *   Its id: the owner's, then the key.
+   * @param string $module
+   *   The owner's module.
+   * @param array{interface: string|null, targets: array<string, string[]>, required: bool} $filter
+   *   What the key's author narrowed it by, as
+   *   EntityReferenceStructure::filter() reads it.
+   *
+   * @return string
+   *   The name it is attached and built by.
+   */
+  public function defineReference(string $id, string $module, array $filter): string {
+    $name = 'reference:' . $id . ':' . hash('xxh128', serialize($filter));
+    $this->read[$name] ??= new ResourceDefinition(
+      class: NULL,
+      id: $id,
+      module: $module,
+      identity: [],
+      storage: NULL,
+      access: NULL,
+      refiners: self::refinersOf(new \ReflectionClass(EntityReferenceStructure::class)),
+      inputs: new ResourceCallable(EntityReferenceStructure::class, 'fill', [
+        $filter['interface'],
+        $filter['targets'],
+        $filter['required'],
+      ]),
+      kind: ResourceDefinition::STRUCTURE,
+      readAs: $name,
+    );
+    return $name;
+  }
+
+  /**
    * Gets every discovered shape.
    *
    * @return array<class-string, \Drupal\data_surface\ResourceBuild\ShapeDefinition>
@@ -746,6 +864,9 @@ final class ResourceRegistry {
    *   The definition, or NULL.
    */
   protected function find(string $resource): ?ResourceDefinition {
+    if (isset($this->read[$resource])) {
+      return $this->read[$resource];
+    }
     $provisional = $this->provisional();
     if ($provisional !== NULL) {
       if (isset($provisional['resources'][$resource])) {
@@ -1182,6 +1303,7 @@ final class ResourceRegistry {
               idempotent: $operation->idempotent,
               creates: $operation->creates,
               description: $operation->description,
+              deletes: $operation->deletes,
             );
             $this->assertStamps($definition);
             return $definition;
@@ -1230,6 +1352,8 @@ final class ResourceRegistry {
       idempotent: $operation->idempotent,
       creates: $operation->creates,
       description: $description,
+      deletes: $operation->deletes,
+      values: $operation->values,
     );
   }
 
@@ -1419,6 +1543,15 @@ final class ResourceRegistry {
       foreach ($method->getAttributes(RefinesInput::class) as $attribute) {
         $refines = $attribute->newInstance();
         $parameters = $method->getParameters();
+        // The account the operation runs as is handed to a last parameter
+        // typed for it, and is no watched key.
+        // Decision: see
+        // docs/decisions.md#nothing-an-operation-runs-reads-the-request.
+        $last = count($parameters) > 1 ? $parameters[count($parameters) - 1]->getType() : NULL;
+        $account = $last instanceof \ReflectionNamedType && is_a($last->getName(), AccountInterface::class, TRUE);
+        if ($account) {
+          array_pop($parameters);
+        }
         $refiners[] = new RefinerDefinition(
           class: $class->getName(),
           method: $method->getName(),
@@ -1432,6 +1565,7 @@ final class ResourceRegistry {
           isStatic: $method->isStatic(),
           runtime: $refines->runtime,
           mayNotApply: DoesNotApply::isDeclaredBy($method),
+          takesAccount: $account,
         );
       }
     }

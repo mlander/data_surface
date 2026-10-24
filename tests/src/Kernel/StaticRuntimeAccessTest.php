@@ -9,7 +9,7 @@ use Drupal\Core\Cache\Cache;
 use Drupal\Core\Session\AccountInterface;
 use Drupal\data_surface\Contract\SchemaResolver;
 use Drupal\data_surface\DataSurfaceInterface;
-use Drupal\data_surface\Refinement\StaticRefinerContainer;
+use Drupal\data_surface\Pipeline\PipelineGuard;
 use Drupal\data_surface\Resource\AccessAnswer;
 use Drupal\data_surface\Resource\OperationContext;
 use Drupal\data_surface_resource_test\Access\Broken\FickleAccess;
@@ -283,7 +283,7 @@ class StaticRuntimeAccessTest extends DataSurfaceKernelTestBase {
    */
   protected function assertionsOn(): bool {
     $on = FALSE;
-    assert(StaticRefinerContainer::asserting($on));
+    assert(PipelineGuard::asserting($on));
     return $on;
   }
 
@@ -476,7 +476,7 @@ class StaticRuntimeAccessTest extends DataSurfaceKernelTestBase {
       $this->assertSame('keep an exhibit', $tools->getDefinition($id)->getPermission(), $id);
     }
     // A placeholder names the subject's permission: never declared.
-    $field = $this->container->get('data_surface.resource_registry')->getOperation('field.instance', 'add');
+    $field = $this->container->get('data_surface.resource_registry')->getOperation('field.instance', 'create');
     $this->assertNull($field->staticPermission());
   }
 

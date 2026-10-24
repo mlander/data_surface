@@ -48,7 +48,7 @@ already asks access by: an entity's access is asked per operation, and
 here an operation's permission and then the access class are asked the
 same way. A structure may still declare operations, but only for its
 container to choose between (the larder's spice rack, invoked through
-`edit` or `restock`); asked on its own, it is the container that is
+`update` or `restock`); asked on its own, it is the container that is
 reached.
 
 The attribute decides the kind, not the directory: a module's
@@ -179,7 +179,7 @@ grep:
 - `Pipeline\Omitted` → `Pipeline\NotEmitted`;
 - `AccessAnswer::answer()` → `AccessAnswer::getAnswer()`;
 - `Storage\StateStorage` → `Pipeline\Storage\StateStorage`;
-- `Storage\ConfigEntityStorage` → `Pipeline\Storage\ConfigEntityStorage`;
+- `Storage\ConfigEntityStorage` → `Pipeline\Storage\ConfigEntityStorage` (back in `Storage\` on 2026-10-23, a resource's storage: [A placed block is a resource](#a-placed-block-is-a-resource));
 - `Storage\FieldSettingsStorage` → `Pipeline\Storage\FieldSettingsStorage`;
 - `Storage\BaseFieldOverrideStorage` → `Pipeline\Storage\BaseFieldOverrideStorage`;
 - `Storage\PluginConfigurationStorage` → `Pipeline\Storage\PluginConfigurationStorage`;
@@ -207,6 +207,69 @@ Deferred:
 - Dated records (`REWORK.md`, `PLAN.md`, `ADOPTION.md`, `HARDENING.md`,
   the fresh-eyes log, the never-stricter audit) keep the words of their
   day.
+
+### The ids are the standard five, the labels are Drupal's
+
+Decided 2026-10-23, by the owner. An operation's id is what a program
+reads: the tool id (`data_surface:event.venue:create`), the custom
+method after a path, `x-surface.operation.id` in both documents, a
+route's `_data_surface_operation`. Its label is what a person reads:
+the form's title and the tool's. The default ids are the kinds' own
+names, `create`, `read`, `list`, `update` and `delete`, and Drupal's
+words for them stay in the labels: `create` is "Add a venue", `update`
+is "Configure the newsletter" or "Edit a content type", `delete` is
+"Remove a placed block".
+
+- **Why the standard ids.** An agent choosing between tools and a client
+  generator naming methods expect these five; `add`, `edit` and `remove`
+  were Drupal's words for the same kinds, which a reader outside Drupal
+  has to map first. An operation's kind (`OperationDefinition::kind()`)
+  has carried these names since
+  [An operation states how it behaves](#an-operation-states-how-it-behaves),
+  so the id of a default and its kind now agree.
+- **Why the labels keep Drupal's words.** People read the label, and a
+  Drupal site's people read "Add", "Edit" and "Remove" on every form. A
+  label changed only where it repeated the old id.
+- **`configure` for an update on a singleton.** A resource with no
+  identity is a settings object, and every settings page has said
+  "Configure" for twenty years, so `configure` stays an accepted id for
+  an update there, a default as `update` is. On a resource with identity
+  it is a custom method like any other. The first resource and every
+  settings example keep it.
+- **`read`, not `get`.** The same operation is a form, a tool and an
+  HTTP path. `get` names one door's method; `read` says what the
+  operation does at all three, and is its kind's name.
+- **The rule.** The default of a kind at a path is the operation whose
+  id is the kind's standard name (`create`, `update`, `read` or `list`,
+  `delete`), or `configure` for an update on a singleton; else the only
+  operation of that kind there; else none, and every operation of the
+  kind is a custom method
+  ([Contract 3](#contract-3-the-operation-is-the-method);
+  `OperationDefinition::defaultIds()`, `ServedPaths::defaults()`). A
+  custom operation keeps any name (`check`, `reorder`, `reuse`).
+- **The old words are refused at discovery.** An operation id `add`,
+  `edit`, `remove` or `get` is refused when discovery reads it, the
+  message naming the standard id that replaces it
+  (`OperationDefinition::RETIRED_IDS`). Refused, not warned: a warning
+  is read once and the id kept, and every tool id, path and document
+  built from it carries the old word on. A contract 2 path that carries
+  one is still gone, read as the renamed operation's
+  (`ServedPaths::CONTRACT_2_IDS`).
+- **What followed.** Every shipped operation so named was renamed with
+  its method, its label kept: the venues, the placed block, the content
+  type, the field and its storage, every content entity resource and
+  field item, and the test modules'. Tool ids follow
+  (`data_surface:event.venue:update`, `:update:read`, `:delete`); the
+  read tool's suffix stays `:read`. Route names follow the id
+  (`data_surface_block.update`, `data_surface_examples.step15_delete`).
+  A path keeps Drupal's own convention where it had one, `/add` and
+  `/edit` (`/admin/structure/block/surface/add`,
+  `/surface-entity/node/{id}/edit`, `/admin/structure/types/surface-add`);
+  a removal's path, `/remove`, followed no convention, and is `/delete`,
+  Drupal's own word for that path.
+  (`OperationDefinition`, `ServedPaths`, `ServedPathsDefaultsTest`,
+  `OperationFactsTest::testRetiredIdsAreRefusedAtDiscovery()`,
+  `ServedPathsTest::testContractTwoPathsAreGone()`)
 
 ### A resource has storage or a host
 
@@ -512,7 +575,7 @@ not declare is reused within the request; that was already a bug,
 since every caller that caches (the schema route, the tool listing)
 trusts the same cacheability.
 
-What it saves: a dry-run call to a basic page's edit tool built three
+What it saves: a dry-run call to a basic page's update tool built three
 times and builds twice (the account's listing, for the account alone,
 and one build the refined `values` and the run share); a schema request
 built its operation twice and builds it once, beside the build for the
@@ -576,8 +639,8 @@ the build resolved that operation (named, matched or the default).
 Permission and access are two questions. A permission is about entering
 an operation, and a parent that built its child's context itself took
 responsibility for that entry, so the child's permission is not asked
-again: a field's reuse and edit build its storage through
-`FieldStorageResource::edit()`, and the field's own permission is the
+again: a field's reuse and update build its storage through
+`FieldStorageResource::update()`, and the field's own permission is the
 gate. Access is about what may be done with what is there, and only
 access composes down the tree. A module like field_permissions hides a
 single field through access, so a context handed whole must not be a
@@ -630,7 +693,7 @@ caller sees first and may replace. (`Resources::applyContext()`)
 
 A known key that is not one of `#[Resource(identity:)]` is not locked;
 it stays on the context for the storage and the access class to read.
-`FieldStorageResource::edit()` knows the field storage's entity type and
+`FieldStorageResource::update()` knows the field storage's entity type and
 field name this way, which `FieldStorageStorage` loads by, while
 `field_type`, its one
 identity key, is locked. (Before storage settings existed, the field
@@ -696,8 +759,14 @@ refine all get it from one place. The check is
 into every data surface the build step makes and serialized by its
 service id; a data surface sealed without one, which only the engine's
 tests build,
-hands every configured value over. A refiner may therefore assume what
-it is handed satisfies its sibling's constraints, and
+hands every configured value over. A value its key's definition as
+declared refuses is withheld before the first pass, since every
+definition refined from it refuses it too: until 2026-10-24 the first
+pass ran with it, and a refiner typed for a number was handed a word
+([Nothing an operation runs reads the
+request](#nothing-an-operation-runs-reads-the-request) found it). A
+refiner may therefore assume what it is handed satisfies its sibling's
+constraints, and
 `RegistrationComplianceAlter` tests only that a license is there. The
 refined data surface says which values it withheld
 (`withheldValues()`), so a refusal that names what a key depends on
@@ -733,7 +802,9 @@ A `#[RefinesInput]` method is static unless its attribute says
 `runtime: TRUE`. A static refiner promises to be a pure function of the
 siblings it watches, so the served contract runs it ahead of time and
 states its answers as conditionals (`enumerated`), or says they cannot
-be listed (`refine`: ask `/refine` with values). A runtime refiner
+be listed (`refine`: ask `POST .../schema` with values, `/refine` until contract 3), as a list the
+site decides says past its budget
+([A budget for what the site decides](#a-budget-for-what-the-site-decides)). A runtime refiner
 promises the schema nothing: the emitter never runs it, in either
 document; the key keeps the width its static refiners give it in the
 full schema and carries `live: true` (the markers were `dynamic` and
@@ -780,7 +851,7 @@ config is the plain case), and no declaration alone stops it:
   default constraints. `t()` passes: it builds a lazy markup. Production
   compiles no assertion and pays nothing. It catches `\Drupal::service()`
   and every shortcut through the container, `::currentUser()` and
-  `::time()` included. (`Refinement\StaticRefinerContainer`,
+  `::time()` included. (`Pipeline\PipelineGuard`,
   `RefinesInputRefiner::invoke()`)
 - **Agreement.** Under `assert()` the emitter asks each enumerated key's
   static refiners again for one combination and refuses a different
@@ -928,7 +999,7 @@ it as it states any static answer. Each door:
 - **React.** The page narrows it from the full schema: a met `false`
   drops the field and what it sends, a met `required` requires it again,
   and a key that did not apply when the page was loaded, whose stored
-  value the page was never handed, is asked of `/refine`.
+  value the page was never handed, is asked of the server (`POST .../schema`).
 
 A list narrowed to nothing is not a key that does not apply. It renders
 as a select offering its empty option alone, the constraint refuses any
@@ -1274,6 +1345,101 @@ alter alike, and `add()` with a NULL default means "no default", not a
 declared NULL. A second `add()` silently replacing the first would be
 an alter changing the owner's key. (`BlueprintAdapterBase::add()`)
 
+### An extension is a variant the site adds, or an alter
+
+Decided 2026-10-23, with example 14. A module that calls a service takes
+a credential pasted as a secret, and, once a module that manages keys
+is on (the Key module), offers a key the site manages in its place and
+draws no secret beside it. There are two ways to build it, and the
+examples ship both, each for the case it fits.
+
+- **The owner integrates: a variant the site adds.** When the module
+  that needs the credential knows the key module, its resource declares
+  both sources, each a structure of its own, and a provider lists them:
+  `attachVariants('credential', by: 'source', from:
+  CredentialSources::class)`, the pasted source always and the managed
+  one only while the key module is on, cacheable by `config:core.extension`
+  and the keys' configuration. Installing the key module is a second
+  source at the next request, with no cache rebuild, in the form, both
+  documents and the tool. The owner's code reads its own variant,
+  `credential.api_key` or `credential.key_id`, and asks the key service
+  for the value of the second.
+- **A closed provider: storage knows both.** The two sources are
+  structures the owner's code names, so the provider implements
+  `ClosedVariantsInterface` and names them in a static `structures()`.
+  The config schema written from the resource then gives each its own
+  type, `credential.[%parent.source]`, as it does for `#[Variant]`
+  classes, whichever the site offers when it is written; a provider
+  whose variants are read from schemas leaves the key `type: ignore`.
+  The build refuses a closed provider's list that offers a value
+  `structures()` does not name, or names it by a schema. Two spellings
+  were turned down. `#[Variant]` classes are always offered, and the
+  managed source must be offered only while the key module is on. A
+  variant's access answer could withhold it, but which sources a site
+  has is the site's, not the account's or the thing's, and that answer
+  would mark the key `access: live` in the full schema.
+- **One value to choose is a fixed value.** With the key module off the
+  provider lists one source. A deciding key whose list its variants
+  derive and that offers one value, which it may not be cleared of, is
+  drawn as that value while it holds it or nothing: the form draws an
+  item showing the value's label, posts the value, and wires no AJAX
+  trigger on it; both documents state `const`, with the label under
+  `x-surface.fixed`, and the widget hint `fixed`, which the React page
+  draws as the label. No select of one: it offers no choice, and a
+  select a person opens to find one option reads as a fault. A list the
+  deciding key declares is the author's and is drawn as declared, so a
+  nested component's `component` key narrowed to one stays a select. A
+  stored value the list no longer offers (`managed` after the key module
+  is uninstalled) is drawn as a select under the empty option rule, so a
+  save that leaves it keeps it. (`DefinitionMetadata::setOneVariant()`,
+  `OptionsWidget::drawsFixed()`, `ContractEmitter::property()`)
+- **A secret survives a switch of variants.** A value written for
+  another variant goes when the deciding key moves on
+  ([An empty variant is an empty map](#an-empty-variant-is-an-empty-map)).
+  A secret is never read back, so a caller who chose the managed key
+  could not send the pasted one again when choosing back, and the key
+  would be lost by a choice the caller made to try something. So a
+  secret another variant declares, stored and not empty, is kept beside
+  the chosen variant's keys, read by no door, and taken up again when
+  its variant is chosen; each variant's config schema says it may be
+  there (`requiredKey: false`). A plain value of a variant not chosen
+  still goes: it can be read and sent again. (`Variants::keptSecrets()`,
+  `Variants::held()`, `DataSurfacePipeline::kept()`,
+  `ConfigSchemaGenerator::keptSecrets()`)
+- **The owner does not integrate: an alter.** The webhook declares a
+  pasted key and nothing else. The key module's alter mounts `key_id` at
+  its own mount, offering the keys the site manages through a constraint
+  and its resolver, and declares
+  `narrow('api_key')->when(Condition::present('key_id'))->doesNotApply()`:
+  once a key is chosen the form draws no pasted box, a pasted key sent is
+  refused naming `key_id`, the full schema states the rule as a
+  conditional, and what is stored for `api_key` is kept for the day no
+  key is chosen. Uninstalled, the key module takes the `key_id` it
+  stored on the webhook with it (`hook_uninstall()`), since no config
+  schema describes it then and a save with schema checking on would
+  refuse the object; the pasted key is the webhook's and stays. Ruling
+  out was chosen over a lock. A lock would draw an
+  empty password box that cannot be used, and would take a pasted key
+  sent with a note instead of a refusal, so a caller who sends both
+  learns of it only from the note; the rule vocabulary has no
+  conditional lock either (ROADMAP item 3 left it out). The page quotes
+  the spelling a lock would have.
+- **What the alter cannot do.** Hand the owner's code the managed key's
+  value. The webhook's code reads `api_key`; `key_id` is under the key
+  module's mount, which the webhook never names
+  ([An alter attaches at its own mount](#an-alter-attaches-at-its-own-mount)).
+  So the alter's way corrects the form, the documents and the tool, and
+  leaves the code that signs a post with no key, while the owner's way
+  has no such gap. An alter supplying the value it rules out is
+  [ROADMAP](../ROADMAP.md) item 18, designed and not built.
+
+Open: whether a plain value of a variant not chosen is kept too (the
+rule against pruning stored values says keep it; a value left by
+another variant has gone since variants were built); and a stored
+source the site no longer offers, which is kept and shown stale, while
+the credential it chose is not built until the source is offered again.
+(`ClosedVariantsInterface`, `CredentialSources`, `WebhookKeyAlter`)
+
 ## Attached structures
 
 ### Variants nothing declares
@@ -1506,7 +1672,9 @@ nothing more to say". It renders as nothing (an empty container on the
 form, nothing on the React page), its value is an empty map, and both
 contracts and the tool state an object with no properties; a value left
 by another variant does not fit it and goes, as between any two
-variants. The map widget serves any complex definition and answers an
+variants, but a secret, which is kept
+([An extension is a variant the site adds, or an alter](#an-extension-is-a-variant-the-site-adds-or-an-alter)).
+The map widget serves any complex definition and answers an
 empty one with `[]`: a map that declares nothing can hold nothing, and
 before this the form threw for want of a widget. A key that does not
 apply at all, rather than applying with nothing to say, is
@@ -1721,11 +1889,95 @@ format core is asked to replace with data definitions
   the architecture review found restating core's schema less strictly,
   states core's control-character patterns now, and `NodeTypeStorage`
   says from the schema that its two booleans always hold a value.
+- **An entity type a module declares** (added 2026-10-23, example 15). A
+  resource whose `ConfigEntityStorage` names an entity type its own
+  module declares gets that type's entry, `<module>.<config prefix>.*`,
+  a fully validatable `config_entity` whose mapping is each key the
+  storage maps to a property, by the property's name, by the same rules;
+  `ALWAYS_HELD` on the storage says which optional keys are never null.
+  No install file is written: what a module ships of an entity type is
+  things, which no resource describes. An entity type of core or of
+  another module keeps the schema its owner writes, held to as above
+  ([A listing is a read-only operation with outputs](#a-listing-is-a-read-only-operation-with-outputs-a-reorder-is-an-update-over-the-collection)).
 
 (`Storage\ConfigSchemaGenerator`, `Drush\Commands\ConfigSchemaCommand`,
 `ResourceBuild\AutowiringClassResolver`,
 `Storage\HeldToConfigSchemaTrait`, `Resources::assertHeldToSchema()`,
 `ConfigSchemaDriftTest`, `ConfigSchemaCheckTest`, `ConfigSchemaCommandTest`)
+
+### The generator writes what the first page shows
+
+Decided 2026-10-24. `drush generate surface:resource` writes every file
+[Your first resource](first-resource.md) lists: the permission and the
+route, the resource class, its storage, and the config object's schema
+entry and install file, from an interview or from one of two sources,
+`--from-config-schema=<name>` and `--from-json-schema=<file>`
+([Generating a resource](generating.md)).
+
+- **One generator, three sources.** Each source is built into a sealed
+  data surface by the build step before anything is written: the
+  answers declared as the class will declare them
+  (`Drush\Generators\Resource\KeyAnswers`), a config schema entry
+  written as JSON Schema (`Contract\ConfigSchemaDocument::document()`)
+  and read, a document read as it is. One writer turns the built keys
+  into the calls an author makes (`ResourceCode`). Why: a key the reader
+  learns to read reaches all three at once, where a template per source
+  would drift from the others.
+- **The page stays the truth.** The page quotes the shipped module, as
+  it did; `ResourceGeneratorTest` answers the interview as the
+  newsletter needs and compares each file it writes with
+  `data_surface_first` byte for byte, whitespace included. Why: the page
+  is the module's concept budget (ROADMAP item 13). Generating the page
+  from the generator would make the generator the description and the
+  page a copy that nothing reads back.
+- **The schema entry and install file come from the command's mapping.**
+  `ConfigSchemaGenerator::describeBuilt()` is what `describe()` runs, for
+  a resource built any way. The generator writes from the build of its
+  source; once the files are in the module's own directory, installed or
+  not, it builds the class just written as the command does (a module
+  read again from its code, `including(..., fromCode: TRUE)`) and writes the
+  class's files where they differ, saying so. Why: the first build runs
+  under `--dry-run` and before any class exists; the second catches a
+  writer that left something out.
+- **Seeding from a config schema, once.** [A config object is described
+  by its resource](#a-config-object-is-described-by-its-resource) turned
+  down seeding the class from the schema as the lasting description. The
+  generator seeds once: after it, the class is the description. For
+  another module's object (`node.settings`) the owner's schema stays
+  that object's description and the resource is held to it
+  (`HeldToConfigSchemaInterface`), so the config schema generator writes
+  no entry for an object whose name another module provides (core's
+  rule: the first part of the name), and the generator writes neither
+  file for one.
+- **A foreign constraint is a comment.** What the reader keeps as a
+  `JsonSchema` constraint, and what a config schema states that its
+  document does not carry, is written as a comment above the key,
+  naming the keyword and the key. Why: written as a `JsonSchema`
+  constraint it would still be checked, but as a schema array the author
+  did not write and may not read; a comment is in plain sight, and the
+  author writes the constraint the module has for it. For a constraint
+  the build holds a resource to its object's schema by (`Regex`,
+  `Length`, `Range`, `Choice`, `Count`, `NotBlank`, `Email`), the comment
+  says the build refuses the resource until it states it.
+- **A YAML file is added to, never replaced.** A routing or permissions
+  file is read, the entry added at its end after a blank line, and
+  written; the rest is kept byte for byte, an entry of the same name is
+  kept and the generated one left out, and a note says which. Why: those
+  files carry entries the generator knows nothing of, and parsing and
+  dumping them would rewrite their quoting and comments.
+- **Two source options through Drush.** Drush hands a generator its
+  answers and its own few options, so a listener declares both on the
+  `generate` command and the generator reads them from Drush's input
+  (`Drush\Listeners\GenerateSourceOptionsListener`).
+- *Open:* a resource with identity, stored in a config entity type. The
+  interview offers it, asks the identity key and stops, naming example
+  15; writing the entity type, its storage and the operations' methods
+  is later.
+
+(`Drush\Generators\ResourceGenerator`, `Drush\Generators\Resource\ResourceSources`,
+`Drush\Generators\Resource\ResourceCode`, `Drush\Generators\Resource\YamlEntryResolver`,
+`Storage\ConfigSchemaGenerator::describeBuilt()`, `ResourceGeneratorTest`,
+`ResourceGeneratorPathautoTest`)
 
 ### The whole object is checked
 
@@ -1746,8 +1998,99 @@ developer's to fix, before any person sees the form.
 A resource's outputs are what its storage's `load()` hands back under
 an output's name, once the values are committed. The storage class
 already knows how to read the thing it wrote; a second verb would say
-the same twice.
+the same twice. *Added 2026-10-23:* a read only operation is never
+committed, so its outputs are what its storage's `prepare()` answered
+under an output's name: prepare is the last stage a read runs, and one
+with no side effects, so the storage reads there, and a listing's page
+is that answer
+([A listing is a read-only operation with outputs](#a-listing-is-a-read-only-operation-with-outputs-a-reorder-is-an-update-over-the-collection)).
+A dry run of any other operation still answers none.
 (`StorageAdapter::outputs()`)
+
+### A computed key is a pure function of its sources
+
+Decided 2026-10-23, with example 15's slug: a key of the resource whose
+value nobody types, computed from other keys and read by callers. The
+spelling is `$inputs->derive('slug', 'string', t('Slug'), from:
+['label'], using: Slugify::class, when: Derive::ON_CREATE)` on the
+owner's blueprint, returning the definition as `add()` does; the class
+implements `DeriverInterface`, whose `derive(array $from): mixed` is
+static. The pipeline computes it in `accept()`, once every other key of
+its level is accepted, from their accepted values; `validate()` judges
+it by its own constraints and rules, `prepare()` and storage write it as
+any key, and the read answers it. Three choices settle it:
+
+- **Pure derivations only.** A deriver is handed the values of `from`
+  and nothing else. With assertions on it runs with the container
+  guarded (`PipelineGuard::guardDeriver()`, which refuses every
+  service), and the module's PHPStan rule flags `\Drupal::` in it. Why:
+  a pure deriver can run anywhere the values are, so `POST .../schema`
+  and a form's rebuild answer the value a write of the values in
+  progress would store, and the value stored is the value shown. A
+  runtime deriver could not be run ahead, and would need a mark of its
+  own in both documents for a value the client cannot predict. A changed
+  time reads the clock: it stays a storage's to add in `prepare()`, as
+  the language code `ConfigObjectStorage` adds is.
+- **When it runs, `when:`.** `Derive::ON_CREATE`, the default, computes
+  it while storage holds nothing for it, which is how a thing being
+  created starts, and keeps what is stored after: a slug a link points
+  at must not move when the name does. `Derive::ON_CHANGE` computes it
+  again on every write in which a key in `from` holds other than what is
+  stored. A write that changes no source keeps what is stored either
+  way. Why a declaration and not one rule: the two cases are both
+  common and say opposite things about an edit, and only the author
+  knows which the key is. Why "storage holds nothing" and not the
+  operation's `creates`: a thing stored before the key existed gets its
+  value at its next write, and a post-update can write the same value
+  for what is stored (`data_surface_examples_post_update_venue_slugs()`).
+- **A value sent for it.** Equal to the one it holds for these values
+  (computed, or stored where it is not computed again), it is noted,
+  code `computed`, "Slug is computed from Name; the value sent was not
+  taken.", as a locked key's is; any other is kept in the accepted
+  document for `validate()` to refuse, code `computed`, "Slug is
+  computed from Name and takes no value of its own; leave it out.", as
+  a value sent for a key that does not apply is. Why not refuse every
+  value: a client that writes back the document it read sends the
+  slug it was given, and refusing that breaks the plainest client. Why
+  not ignore every value: a different value is a caller who believes it
+  set the slug, and a note it may not read leaves it believing so.
+
+A refusal of the value it holds, which nobody sent (its pattern, the
+venue storage's rule that a slug is held once), names the keys it is
+computed from, the ones a caller can change, in a sentence of its own
+after the refusal: "The slug riverside-hall is held already, by
+riverside: a slug is held once across the venues. This is computed from
+Name." While a key in `from` is refused itself, the computed key's
+refusals are left out: they follow from it.
+
+On the wire: both documents state it `readOnly: true` with
+`x-surface.computed: {from, when}`, no `const` (what it holds follows
+its sources), never in `required`; `readOnly` alone means locked, so the
+marker is what tells a client to show it, narrow when a source changes,
+and never send it. The write tool's `values` leaves it out and the read
+tool's output keeps it, so the two shapes differ by the computed keys;
+the read's definition is still the write's, built with them
+(`OperationInputs::map()`). The form draws it as an item, which posts
+nothing; the React page draws it disabled and leaves it out of a write
+(`withoutComputed()`). The generated config schema describes it as any
+key, since storage holds it. Read back from a document, it is a key
+nobody types that holds what is stored: the deriver is a class no
+document names.
+
+*Open:* a deriver that may read the clock or a service, declared
+runtime, never run ahead and marked in both documents; a computed key in
+a structure, or one an alter declares under its own mount from the
+owner's keys it may read (refused for now: what a structure's level is
+computed from would need the structure's own read and listing, and an
+alter's from the owner's keys crosses the wall the alter reads only at
+its mount); computing again on demand, an operation that recomputes a
+stored value its sources no longer give; the React page computing a
+deriver locally, which needs the deriver in a language the page runs.
+(`Computed`, `DeriverInterface`, `Derive`, `ResourceBlueprint::derive()`,
+`DataSurfacePipeline::acceptComputed()`, `DataSurfacePipeline::notComputed()`,
+`DataSurfacePipeline::namingSources()`, `PipelineGuard::guardDeriver()`,
+`DataSurfaceFormBuilder::refinementOverlay()`, `Slugify`, `ComputedKeysTest`,
+`VenueResourceTest`)
 
 ## Access
 
@@ -1832,7 +2175,7 @@ is known. Decided 2026-10-18, point by point.
   `assert()`: the first asking of a static answer is repeated with the
   global container guarded and must answer the same, static, having
   asked for no service that reads site state beside the account
-  (`StaticRefinerContainer::guardAccess()`, `Resources::answersAgain()`).
+  (`PipelineGuard::guardAccess()`, `Resources::answersAgain()`).
   The refiner's guard is reused with another rule for what passes: a
   refiner may reach nothing but the typed data manager, while an access
   class is a service with injected collaborators and core's handlers
@@ -1937,7 +2280,7 @@ is known. Decided 2026-10-18, point by point.
   for every account, says `user.permissions`, the widest the account
   alone varies by. A context naming no field, as a tool's static
   definition for an operation that needs a subject is built in, asks
-  nothing and is runtime, so an entity's edit tool lists every field
+  nothing and is runtime, so an entity's update tool lists every field
   marked, where it listed them open before. The classes asked only at
   the top (`NodeTypeAccess`, `FieldInstanceAccess`,
   `ContentEntityAccess`, the test module's recipe) answer whether the
@@ -2075,7 +2418,7 @@ gated the caller; that left a child one author's mistake away from
 being let through unasked, and a build that knows too little anywhere
 else is that mistake ([Every door projects what the read tool
 projects](#every-door-projects-what-the-read-tool-projects)).*
-Adding a field invokes its storage's `add`, whose permission names the
+Adding a field invokes its storage's `create`, whose permission names the
 entity type the field's context knows; a bare context knows none. For
 the same reason a child operation's permission that resolves to the very
 permission its parent's operation asks says nothing either: the parent's
@@ -2255,7 +2598,8 @@ moves with the site's language and its alters.
   module's own for its own refusals (`required`, `does_not_apply`,
   `unknown_key`, `locked`, `cannot_clear`, `type_mismatch`,
   `wrong_variant`, `no_variant`, `secret_in_item`, `not_found`,
-  `access`, `permission`, `conflict`, `no_schema`, `stale`). The table
+  `access`, `permission`, `conflict`, `no_schema`, `stale`, and since
+  2026-10-23 `taken`). The table
   is in [semantics](semantics.md#codes). Why the name and not Symfony's
   UUID: the name stands for it one to one (`Constraint::getErrorName()`)
   and reads in a log and a transcript. The pipeline dropped the
@@ -2270,6 +2614,15 @@ moves with the site's language and its alters.
   with codes: a value sent for a locked key and not taken is `locked`,
   a stored value kept that the key no longer offers is `stale`, and
   carries the value it keeps (left out for a secret).
+- **Every path a JSON Pointer** (decided 2026-10-22, with
+  [contract 3](#contract-3-the-operation-is-the-method)). `path` in a
+  violation, a note and a stale entry, and each entry of `changes`, is a
+  JSON Pointer, `/contact/email`, at every door: the tool's result and
+  its text lines, Drush's JSON, the HTTP results and problem details.
+  The whole call is the empty pointer, as it was the empty path. Until
+  then they were dotted paths, `contact.email`. The form keeps its own
+  naming, and a message names a key as its renderer does
+  (`ResultDocument::pointer()`).
 - **At each door.** The write tool's result carries the shape as its
   context, on a refusal as on a success (`drush tool:run --json` prints
   it as `outputs`), and declares each key as an output, a read only
@@ -2278,8 +2631,10 @@ moves with the site's language and its alters.
   message", after "The values were refused:", a refusal of the whole
   call its message alone on its line, and a line per note after. The
   resource's own outputs follow the shape, never over one of its keys.
-  React's `/validate` answers the shape and nothing else; `/submit`
-  answers it with its own `outputs`, `contract` and `created` after.
+  HTTP answers it with its own `outputs`, `contract` and `created`
+  after, and a refusal as problem details whose `errors`, `notes` and
+  `stale` are its entries (until contract 3, `/validate` answered the
+  shape alone and `/submit` refused with a 200).
   The read tool answers a read, `values` alone, and its refusals in the
   shape. The form reads the same violations and renders them for a
   person.
@@ -2299,6 +2654,105 @@ moves with the site's language and its alters.
 `OperationInputs::outputs()`, `ResourceApiController::validate()`,
 `ResourceApiController::submit()`, `ResultCodesTest`,
 `ToolResultShapeTest`)
+
+### Nothing an operation runs reads the request
+
+Decided 2026-10-24. Every door asks one surface, so the form, the HTTP
+API, the tool and a PHP caller give one answer for one document; the
+one way to break that is code run on an operation's behalf reading what
+only one door has. So nothing the build or the pipeline runs for an
+operation reads the request, its route, the session, the form being
+built, the theme a page renders in, or the current user: a runtime
+refiner, an access class, static or runtime, an alter, a computed key's
+deriver, an options resolver, a provider of keys or variants from the
+site, a deriver of variants or resources, and a storage's `load()`,
+`prepare()`, `commit()`, `prepareDelete()` and `delete()`. Everything an
+operation needs comes through it: the parameters and identity its
+context knows, the values, the account, and site state through services
+whose answers carry their cacheability. The doors read the request:
+that is their job ([No door-specific context](resources.md#no-door-specific-context)).
+
+- **The account travels as an argument.** A door sets the account as the
+  current user; the framework reads it once and hands it on. An access
+  class has it in `access($context, $account)`, as before. Each storage
+  write verb takes it, `prepare($context, $values, $account)`,
+  `commit($context, $prepared, $account)`, `prepareDelete($context,
+  $account)` and `delete($context, $prepared, $account)`: the account
+  `ResourcesInterface::storage()` is given, or the current user. A
+  runtime refiner whose last parameter is typed `AccountInterface` is
+  handed it, and that parameter is no watched key; a static refiner that
+  takes it is refused at build, since what an account may choose is a
+  fact no schema states ahead of time. `load()` takes none: what is
+  stored is no account's, and what a caller sees of it is the read
+  tool's projection and the access answers'. Why an argument and not a
+  read: a door that runs for another account than the session's (a
+  queue worker, a tool called for a delegated account) hands one account
+  to every piece, and nothing reads a second one behind it. Why not on
+  the context: the context keys every build kept for the request and
+  rides in a serialized form; an account on it would key them by user
+  and serialize a session.
+- **Enforced as static refiners are.** Under `assert()`, each such call
+  runs with the global container replaced by `Pipeline\PipelineGuard`
+  (the name was `StaticRefinerContainer` while it held static refiners
+  alone), which refuses the door-specific services (`request_stack`,
+  `current_route_match`, `router.request_context`, `session`,
+  `session_manager`, `tempstore.private`, `form_builder`, `path.current`,
+  `path_alias.manager`, `theme.manager`, `current_user`) when the class's
+  own code asks for one, naming the service, the class, the method and
+  why: "a door-specific service makes the doors disagree". Core's code
+  it calls is core's: an entity's save reads the current user for its
+  own hooks. A service injected when the class was built never passes
+  through the container, so the instance's properties are looked through
+  once for one (`PipelineGuard::holdsNothingDoorSpecific()`). Site state
+  with cacheability passes; a static refiner and a deriver still reach
+  nothing but the typed data manager, and a static access answer asked
+  again nothing that reads site state. A declared rule is data the
+  engine evaluates and runs no code of the author's, so it has nothing
+  to guard. Before anything runs, the module's PHPStan rule
+  (`DoorSpecificRule`) flags, in those classes, the `\Drupal` shortcuts
+  to these services, a container's `get()` naming one, and a constructor
+  parameter typed for one. Production compiles no assertion and pays
+  nothing.
+- **Held by a test over every door.** `DoorAgreementTrait` runs one
+  document through the pipeline, the tool (`execute()`, dry), the HTTP
+  submit (`?dryRun=true`) and the operation's form (drawn with the
+  document, posted as a browser posts it, submitting dry) and holds them
+  to one verdict, one accepted document, one refusal list by pointer and
+  code and one set of notes. `ResourceTestBase::testEveryDoorAgrees`
+  runs it for an adopter, and `EveryDoorAgreesTest` over every resource
+  this repository ships and every fixture, with the documents the
+  declaration generates and the examples' README calls. A door it
+  cannot drive for a document is counted by kind (the Tool API's own
+  shape check, a value no form posts, a key the form does not draw, a
+  secret, a delete's confirmation, an operation not asked on its own, a
+  resource with no storage, a subject the site there does not have), and
+  the kinds are held to that list, so a new one fails.
+- **What it found.** Four disagreements, fixed with it. The operation
+  form said a refusal that storage's `prepare()` or the access answer
+  made from its submit handler, which Form API refuses once validation
+  is over (a placed block made again threw); it now runs the whole run
+  dry in validation and says every refusal on its elements. A collection
+  whose items hold variants (a placed block's visibility conditions) was
+  read through the item's plain map, which knows none of the variants'
+  keys, so an untouched save cleared them; it is read a level at a time.
+  Refinement's first pass handed a refiner a value its key's declared
+  definition refuses, so a refiner typed for a number threw on a word
+  (`ComplianceStructure::stewardsForCapacity()`); such a value is now
+  withheld before any refiner runs ([A refiner never sees an invalid
+  sibling](#a-refiner-never-sees-an-invalid-sibling)). And the HTTP API
+  writes a whole float as a JSON integer, `20` for `20.0`, which the
+  comparison reads as JSON does.
+
+*Open:* the listing form draws a boolean filter that holds nothing as a
+checkbox left clear, so it cannot say "any" (the venues' `status`); the
+plugin hosts' forms (`DataSurfaceHostFormTrait`, the demo form) still
+say a refusal from their submit handler; core's selection handler reads
+the current user itself for a reference's options, which every door
+sets alike. (`PipelineGuard`, `RefinesInputRefiner::invoke()`,
+`StorageAdapter`, `ResourceStorageInterface`, `DeletableStorageInterface`,
+`Tests\data_surface\PHPStan\DoorSpecificRule`, `PipelineGuardTest`,
+`DoorAgreementTrait`, `EveryDoorAgreesTest`,
+`ContentEntityStorageTest::testTheWriteIsMadeAsTheAccountItIsHanded()`)
 
 ### Locked at the top
 
@@ -2476,7 +2930,7 @@ configures. (`ResourceOperationToolDeriver`, `ResourceCatalog::standalone()`)
 ### A permission nothing can name is no tool
 
 An operation whose permission has a `%key` none of its parameters can
-supply is no tool: it could never be allowed. `field.storage`'s `add`
+supply is no tool: it could never be allowed. `field.storage`'s `create`
 is only ever a field's child. (`ResourceOperationToolDeriver`,
 `ResourceCatalog::standalone()`)
 
@@ -2529,7 +2983,9 @@ value not on its list unexplained.
 - **The machine's rendering: keys by path, values as sent** (decided
   2026-10-20, from the AI agents review, group C of the reviews'
   synthesis, approved by the owner, amending the form's bullet above,
-  whose list named each label with its value in brackets). The tool's
+  whose list named each label with its value in brackets; amended
+  2026-10-24 for the key a condition names, which both renderings now
+  name by its label, in the next bullet). The tool's
   text and the `message` of its result ([One result at every
   door](#one-result-at-every-door)) render the same sentences for a
   machine: a key a condition names by its dotted path in the values a
@@ -2548,6 +3004,39 @@ value not on its list unexplained.
   chooses, so a translator still meets each sentence once. The refused
   key itself keeps its label in "@label is required when ...": the
   violation's path already names it.
+- **A condition names a key by its label** (decided 2026-10-24,
+  amending the bullet above). The clauses "when <key> is <value>", "when
+  <key> is set" and the rest name the key a condition reads by its
+  label, at every door and in both renderings; a key held by another (a
+  key an alter mounted, a property of a map, a key of a child, a variant
+  or an item) by the label of what holds it, a colon, then its own; an
+  item by its list's label; a port as the key it reads; and only a key
+  with no label by its JSON Pointer, `/third_party_settings/x/flag`.
+  Only the sentence changes: the refused key's pointer stays the
+  result's `path`, and the value keeps what is sent beside its label
+  for a machine. Example 14's webhook said "API key does not apply when
+  third_party_settings.data_surface_examples_keys.key_id is set." and
+  says "API key does not apply when Managed key: Key is set."; the
+  parcel's declared value said "... Customs code is empty." and says
+  "... Data Surface Resource Test: Customs code is empty." (the mount is
+  titled with its module's name); a crate's layers, in the fruit
+  variant at `contents_settings`, say "This applies when Contents
+  settings: Fruit is peach."; the bulletin's send day says "when
+  Frequency is monthly (Monthly)" where it said "when frequency is
+  ...". Why: a path in the middle of a sentence reads as storage
+  layout, and a mounted key's names the module that mounts it, not the
+  thing a caller chose; the caller already has the path of what to fix
+  in `path` and the path of what it depends on in the listing's
+  "Depends on" line, so the sentence carries the words a person and an
+  agent both read, and one quote of it holds at every door. Why
+  "Managed key: Key" and not "Key, under Managed key,": the colon joins
+  two names with no translated word, as the semicolons between three
+  or more conditions do, so each clause stays one source string, and
+  "under" would be a fragment glued into a name or a second set of
+  clauses for every kind. Why the holder alone and not the whole trail:
+  one level says where the key is, and the levels above it
+  ("Third party settings") are grouping a caller never chose
+  (`DataSurfacePipeline::conditionKey()`, `RefusalLabelsTest`).
 - **Whole sentences, for translation** (decided 2026-10-20, from the
   multilingual review, B10). Every sentence a refusal adds is one source
   string a translator sees entire, in the context `data_surface
@@ -2576,8 +3065,9 @@ value not on its list unexplained.
   sibling](#a-refiner-never-sees-an-invalid-sibling)), so it is said as
   empty, with what was refused. With an event license of "EV-2048" and a
   capacity of 150, the capacity's refusal reads "This value should be
-  between 1 and 100. This applies when Room is Main hall and Event
-  license is empty (EV-2048 was refused)."; it read "... is set", the
+  between 1 and 100. This applies when Room is Main hall and
+  Compliance: Event license is empty (EV-2048 was refused)."; it read
+  "... is set", the
   opposite of the reason, and an agent cleared the license
   (`DataSurfaceInterface::withheldValues()`).
 - **Why each part.** The caller who sent stewards and no capacity learns
@@ -2627,7 +3117,17 @@ value not on its list unexplained.
   keeps every constraint it advertises, and the MCP server, which holds
   arguments to the advertised schema before a tool runs, refuses a
   value off an advertised list with that list. A value of the wrong type,
-  or a required key left out, is still the Tool API's to refuse.
+  or a required key left out, is still the Tool API's to refuse, with
+  one exception (decided 2026-10-24): a map or a list sent for a key of
+  a scalar type, at any depth, is refused by the tool's shape check
+  before the Tool API's validators run, `type_mismatch` by its path, in
+  the pipeline's sentence ("This value must be of type uri, array
+  given."), and taken out of what they read. Core's
+  `PrimitiveTypeConstraintValidator` reads a `uri` with `parse_url()`
+  and a `decimal` with `preg_match()`, and either throws a `TypeError`
+  on an array, which the Tool API answered as "Tool execution failed:
+  TypeError" (`InputDefinitions::withoutNonScalars()`,
+  `ArraySentForAScalarTest`).
 - **The listing names what a key depends on.** In a tool listing a key
   another narrows says so in its own description, once: "Depends on
   venue." Each key by its path in `values`, what a caller sends it
@@ -2670,11 +3170,13 @@ that destroys, or that is not idempotent, is refused at discovery.
   ([Whether an operation creates](#whether-an-operation-creates)), so
   idempotence is derived from it and declared only where the author
   knows better: an operation that appends is not idempotent, and a
-  create whose caller names the thing is. None of the module's own
-  operations destroys: an edit changes the keys it is sent, and a key
-  left out keeps its value.
+  create whose caller names the thing is. An edit destroys nothing: it
+  changes the keys it is sent, and a key left out keeps its value. The
+  first operation that does is the placement's `delete`, a delete
+  (decided 2026-10-23); a delete that does not say it is destructive is
+  refused at discovery.
 - **A create the caller names is idempotent** (decided 2026-10-20).
-  `node.type:add`, `field.instance:add` and `field.instance:reuse`
+  `node.type:create`, `field.instance:create` and `field.instance:reuse`
   create a thing whose identity the caller sends, a machine name or a
   field name on a bundle: the second identical call finds that name
   taken and leaves what the first left (the content type's is refused
@@ -2683,7 +3185,7 @@ that destroys, or that is not idempotent, is refused at discovery.
   stays `create`: whether a tool requires the resource's keys at its
   door follows from creating, not from idempotence, and no `put` kind
   was added. A create whose storage gives the id (a content entity's
-  add) stays derived, not idempotent. Derivation was weighed (a
+  create) stays derived, not idempotent. Derivation was weighed (a
   creating context that leaves an identity key for the caller) and not
   taken: it reads the context, which waits for the parameters, and the
   attribute already says it in one word.
@@ -2704,8 +3206,8 @@ that destroys, or that is not idempotent, is refused at discovery.
   `readOnlyHint` from a kind that does not modify, `idempotentHint` from
   the kind, and `destructiveHint` from the flag. *Gap, to file:*
   idempotence is a property of the kind in the Tool API, not of the
-  tool, and every kind that modifies is not idempotent, so an edit
-  cannot say it is idempotent while an add says it is not: both are
+  tool, and every kind that modifies is not idempotent, so an update
+  cannot say it is idempotent while a create says it is not: both are
   `Write`, and both read as not idempotent. `Write` is the least wrong
   kind for an idempotent operation that changes what exists: every
   idempotent kind does not modify, and would also say the operation
@@ -2726,11 +3228,15 @@ that destroys, or that is not idempotent, is refused at discovery.
   contract diff. A document
   asked for in no operation states none.
 - **A kind, derived.** `kind` names the call in one word, `create`,
-  `update` or `read` (decided 2026-10-19): a read only operation is a
-  read, one that creates is a create, and every other an update
+  `update`, `read` or `delete` (decided 2026-10-19; `delete` 2026-10-23):
+  a read only operation is a read, one that creates is a create, one
+  that says `deletes: TRUE` a delete, which takes no values and removes
+  the thing it names
+  ([A placed block is a resource](#a-placed-block-is-a-resource)), and
+  every other an update
   (`OperationDefinition::kind()`), read off the attribute, so known
   before anything is built. It is never declared, so it
-  cannot disagree with `readOnly` and `creates`. The contract diff
+  cannot disagree with `readOnly`, `creates` and `deletes`. The contract diff
   compares it beside `creates` (until [contract 2](#contract-2) it
   compared `readOnly`, which the documents no longer state). It is the
   fact a client needs first,
@@ -2890,7 +3396,10 @@ or a scalar for every identity key, named one thing whole), because
 whether it creates was on its context, which cannot be built before the
 subject is named; `creates` on `#[Operation]`, checked against the
 context the way its id is, replaced the reading, closing the point this
-entry left open. (`ResourceCatalog::reads()`)
+entry left open. The narrowing tool, `:schema`, is a read beside the
+write tool for another reason, a key the listing states open
+([A budget for what the site decides](#a-budget-for-what-the-site-decides)).
+(`ResourceCatalog::reads()`)
 
 ### A read promises shape, not membership
 
@@ -3415,7 +3924,7 @@ Measured, before and after:
 | Tool listing after one field saved | 240 ms, 106 builds, every tool derived | 149 ms, 3 builds, the page's three tools derived and 62 read from their entries; the rest is the Tool API discovering every other module's tools |
 | Tool listing, warm | 7.6 ms | 6.1 ms |
 | This module's deriver, everything cold | 54 to 58 ms, 106 builds | 45 to 52 ms, 45 builds |
-| A dry-run call to a basic page's edit tool | 3 builds | 2 |
+| A dry-run call to a basic page's update tool | 3 builds | 2 |
 | A schema request | 2 builds of the operation, and 1 for the account alone | 1, and 1 |
 | The schema route's access check | 1 build | none |
 | A content type saved | every tool and every definition read again | the index, the page's entry and three resources' tools written again (the page, and two whose keys list content types); the other 90 entries and 24 tool entries kept |
@@ -3450,6 +3959,69 @@ change the id shape.
 `ContractEmitter::refinedFor()`, `DiscoveryPerDefinitionTest`,
 `ToolDefinitionsPerResourceTest`, `EmitMemoTest`,
 `PerformanceBudgetTest`)
+
+### The catalog is the site's live map
+
+Decided 2026-10-24. `drush surface:catalog` lists what discovery finds
+on the site the command runs on, from any module, derived resources and
+read-back structures included, not what a repository declares: a person
+reading it wants the thirty-second answer for this site, every
+resource, where it lives and how it is reached, and a check wants to
+know what fails to build before a caller finds it. Three choices, and
+why:
+
+- **Doors are named by the module that opens them.** Each module that
+  opens a door implements `CatalogDoorsInterface`, a service tagged
+  `data_surface.catalog_doors`: the main module names the form routes
+  (any route naming the operation in `_data_surface_resource`), the
+  tool bridge the tool and the read tool it derived, the React module
+  the HTTP path and the page, the OpenAPI module its operation. The
+  main module cannot know a submodule's paths, and a door listed where
+  its module is off would be a promise nothing keeps. The tool door is
+  read off the Tool API's definitions, so it lists the tools that
+  exist, not the ones the rule says should.
+- **Every operation is built, for no account.** A refusal that only a
+  build raises (an operation's context that does not match, a refiner
+  watching a key it never declares, a child that cannot be attached) is
+  per resource on purpose ([What is paid once and what per
+  request](#what-is-paid-once-and-what-per-request)), so listing it
+  means building: each operation as its tool listing is
+  (`buildDeclared()`, as the anonymous account), so the map is the same
+  whoever runs it. A refusal points at the first class its message
+  names, the file a reader opens; `--refused` exits 1 when it lists
+  anything.
+- **What a build reads from a schema is listed, grouped.** A structure
+  read from a schema document (a component's props and slots) is
+  registered only when a build reads it, so the catalog lists them
+  after building everything, by the name each is built by. A theme of
+  components gives thousands, so the table and the markdown count them
+  where they are read; the JSON lists every one. A key's variants past
+  the site list limit are listed by value and their keys not walked
+  ([A budget for what the site decides](#a-budget-for-what-the-site-decides)).
+- **The repository's catalog is the command's markdown.**
+  `docs/catalog.md` is `--format=markdown` for a test site with this
+  repository's modules installed, written by `ResourceCatalogTest`
+  through `SiteCatalog::markdown()`, the call the command makes; one
+  renderer, so the document and the command cannot drift. The static
+  layer's own reading (`ResourceCatalog::describe()`) stays what the
+  rest of the module reads.
+- **The page is the command's table, linked** (decided 2026-10-24).
+  `/admin/config/development/surfaces` shows the rows the command
+  prints, read from the same call (`CatalogDocument::rows()`), each door
+  linked by the module that opens it (`CatalogDoorLinksInterface`), and
+  the refusals; `/admin/config/development/surfaces/<id>` shows one in
+  full. Under a restricted permission of its own, since it names every
+  class and file a refusal points at. No dry run on it: the doors
+  themselves run one. The data is no account's, so the page says the
+  per-request documents differ by account; `CatalogPageTest` reads the
+  page's table as text and holds it to the command's rows on whatever
+  the site has.
+
+(`ResourceBuild\SiteCatalog`, `ResourceBuild\CatalogDocument`,
+`ResourceBuild\CatalogDoorsInterface`,
+`ResourceBuild\CatalogDoorLinksInterface`, `Drush\Commands\CatalogCommand`,
+`Controller\CatalogController`, `CatalogCommandTest`, `CatalogPageTest`,
+`ResourceCatalogTest`)
 
 ## Derived resources
 
@@ -3532,7 +4104,7 @@ and access stay derived, because they are the field's, not its type's.
 ### Field access is child access
 
 Each field of a content entity resource is a child invoked through its
-own operation, `add` or `edit` to match the parent's, so field
+own operation, `create` or `update` to match the parent's, so field
 access is the child's access, through the three answers access already
 had: edit allowed is open, view allowed is locked, neither is omitted.
 No mechanism of its own was needed, which is what the child operations
@@ -3568,7 +4140,7 @@ rebuild. An invalidator in `data_surface_tool` closes the gap without
 coupling the engine to the Tool API: the tool deriver remembers the cache
 tags of every derived definition and of every resource it built, and an
 invalidation of any of them clears the tool definitions, so a field added
-to a bundle reaches the `add` tool's static `values` at the next listing.
+to a bundle reaches the `create` tool's static `values` at the next listing.
 Since 2026-10-20 the listing derived again is made from each resource's
 own entry, kept under that resource's tags, so the field's bundle is
 derived again and every other resource's tools are read as they were
@@ -3724,8 +4296,8 @@ the place to say where they go.
 A plugin host builds the structure its plugin names in a bare context
 whose id is the host's own verb (`configure`, `field_settings`),
 which is no declared operation. The pattern says the host "supplies the
-operation" without naming one; a plugin's configuration has no add or
-edit, only the instance the host holds. (`DataSurfaceHostTrait`)
+operation" without naming one; a plugin's configuration has no create or
+update, only the instance the host holds. (`DataSurfaceHostTrait`)
 
 ### A plugin host cannot overlay a full submission
 
@@ -3741,7 +4313,11 @@ because the dependent's select still offers the stored parent's choices.
 With JavaScript the parent's AJAX rebuild offers the new choices first
 and the case does not arise, and an invalid pair is refused either way.
 The fix is a host supplying its subform's parents to
-`surfaceSubmissionPath()`. `DemoBlockTest` pins today's refusal.
+`surfaceSubmissionPath()`. `DemoBlockTest` pins today's refusal. The
+component block's create form is the same case with variants: without
+JavaScript the props are drawn for the component stored, none, so a
+component chosen and saved at once is refused for the props it requires
+("Heading is required."), which `ComponentBlockPlacementTest` pins.
 (`DataSurfaceHostTrait::surfaceSubmissionPath()`)
 
 ### Static defaults
@@ -3759,6 +4335,528 @@ demo's own, `DataSurfaceDemoBundleField`, and its options resolver.
 The pattern fetches such a list through an options source, which is
 not built yet, and no core constraint names a bundle's fields.
 (`DemoBlockStructure::fieldOfBundle()`)
+
+### A block embeds a component through its structure
+
+Decided 2026-10-23. `data_surface_component_block` ships a block,
+"Component" (`data_surface_component`), that embeds a single-directory
+component: a component chosen from those the site has, and its props
+read from the schema the component declares. Its settings are a
+structure of two keys, example 12's two lines under the block's id,
+`block.data_surface_component`. Each choice, and why:
+
+- **A structure and a host, as for any plugin.** The plugin names the
+  structure with `#[UsesStructure]` on `DataSurfaceBlockBase`, so the
+  block host builds it in its `configure` context, draws the settings
+  form, holds what is submitted to the structure and stores it in the
+  block's settings ([A plugin host's
+  context](#a-plugin-hosts-context)). The plugin's own code is
+  `build()`: `#type => 'component'` with the component and its props.
+  No `defaultConfiguration()`, `blockForm()`, `blockValidate()` or
+  `blockSubmit()`. Choosing a component swaps the props below it for its
+  own over AJAX, as it does on example 12's page, because the variants
+  are the same. The config schema is written by hand, the props
+  `type: ignore`, since a plugin's settings schema is not generated yet
+  (ROADMAP Phase B, item 5) and which components a site has is the
+  site's ([A schema can be read back into a
+  structure](#a-schema-can-be-read-back-into-a-structure)).
+- **One provider, in the main module.** `ComponentProps` moved from the
+  examples to `Drupal\data_surface\Variants\ComponentProps`. Example 12
+  must keep working with the submodule off and the submodule must work
+  without the examples, so the provider can live in neither; the main
+  module needs nothing new for it, since the component plugin manager is
+  core's. One class means the two declarations list the same components
+  with the same schemas, and both documents write the same defs under
+  each owner's id. Rejected: a copy in the submodule, two places that
+  decide which prop types are stored; the provider in the submodule,
+  which would make the examples depend on the block module.
+- **The component is not required**, where example 12's is. The block
+  host constructs the plugin from the declared defaults through the
+  pipeline (the block form, the block listing), so a required key needs
+  a default the site has, and no component is one every site has: with
+  the key required, installing the module failed with "Component is
+  required." A block with no component renders nothing, and so does one
+  whose component the site no longer has, with no error.
+- **The props as stored, less what holds nothing.** The pipeline stores
+  null for a prop given no value, and core's check of the props at
+  render refuses null for a prop whose type has no null (the card's
+  link). A null means the prop holds nothing, so the block leaves it
+  out and the component reads its own default, as a prop never passed.
+  The render array carries the built structure's cacheability, which is
+  the component list's (`config:core.extension`), and the block names
+  the extension providing its component as a dependency, so the block
+  goes with that module or theme.
+- **Props only.** A slot is markup another part of the site fills: its
+  definition is a title and a description, with no schema for a value a
+  block could store, so the block passes props and no slot. *Changed
+  2026-10-23:* each slot holds text, one component or a list of them,
+  narrowed to what the slot expects ([A slot holds text, a component, or
+  components](#a-slot-holds-text-a-component-or-components)).
+- **A placed block is configured through the placement resource.**
+  *Changed 2026-10-23.* The submodule declared a resource for a placed
+  component block, `block.placed_component`, until the general case
+  landed: a placed block of any plugin is now `block.placement`, whose
+  plugin chooses its settings, this block's structure for this plugin
+  ([A placed block is a resource](#a-placed-block-is-a-resource)). The
+  stop-gap resource and its storage are gone, and its two tools with
+  them.
+
+Example 13 (`/surface-examples/13`) shows the structure beside example
+12's resource, the block's contract, the placement's tools, and three
+calls to them: the create that placed the Spotlight block, made again,
+an update of its props and its removal, each a dry run. The examples
+place the Spotlight block through the create operation in the
+default theme's content region, shown on that page alone, once the
+block and the placement are on. *Open:* listing the placed blocks; the
+create form without JavaScript ([A plugin host cannot overlay a full
+submission](#a-plugin-host-cannot-overlay-a-full-submission)). *Closed
+2026-10-23:* one resource for a placed block of any plugin, and placing,
+moving within a theme and removing blocks through a tool
+([A placed block is a resource](#a-placed-block-is-a-resource)); the
+component's slots ([A slot holds text, a component, or
+components](#a-slot-holds-text-a-component-or-components)).
+(`ComponentBlockStructure`, `ComponentBlock`,
+`Variants\ComponentProps`, `ComponentBlockTest`,
+`ComponentBlockPlacementTest`, `ComponentBlockAjaxTest`)
+
+### A slot holds text, a component, or components
+
+Decided 2026-10-23. The component block and example 12 store a
+component's slots beside its props: `slots`, one key per slot the
+component's metadata declares. Core lets a slot say what it expects,
+`expected`, `minItems` and `maxItems` (core issue 3514072), and leaves
+how strictly to apply them to a display builder. Each choice, and why:
+
+- **Two keys one component chooses, from two providers.** `props` from
+  `ComponentProps` and `slots` from `ComponentSlots`, each
+  `attachVariants(..., by: 'component', from: ...)`. One variant per
+  component holding both was weighed first, so that one `anyOf` would
+  state both. It would move the props every placed block and example 12
+  store one key down, a breaking change to every stored value, and the
+  engine has no variants whose keys are the owner's own. Two keys leave
+  the stored props where they are and add `slots` beside them; the
+  contract states each as `anyOf` of its defs, with one conditional per
+  component and key. A component with no slot is a variant with no
+  keys, so both keys offer the same components, and neither narrows the
+  component to fewer.
+- **A slot holds one of three things, chosen by `kind`.** `text`, a
+  plain string; `component`, one nested component, the top's three keys
+  again (`component`, `props`, `slots`); `components`, a list of those.
+  Each kind's key does not apply while `kind` says another (a declared
+  rule), so what is stored is what the kind holds and nothing beside it.
+  `kind` starts from `text`.
+- **Text is a plain string.** Rendered as `#plain_text`, escaped where
+  the slot prints it. Formatted text was turned down: the formats a
+  person may use depend on the account, and a provider's list is refused
+  when it varies by the account; a format is also configuration the
+  block would depend on. A slot's metadata says nothing of its value's
+  type to choose otherwise.
+- **Expectations are refusals.** `expected` narrows the nested
+  `component` key to the ids it names, and, for an entry with no colon,
+  to the components whose `tags` hold it; an empty list offers no
+  component, so the slot holds text alone (the card's `body`). The
+  `components` list gets `minItems` and `maxItems` as its Count, and a
+  `maxItems` of 1 leaves no list. A slot that expects nothing offers any
+  component. Why refusals, where core says expectations: the contract
+  states what a slot offers, and a contract that lists an expectation
+  and accepts anything would be stricter on paper than in practice. A
+  component outside the list is refused naming the ones the slot
+  expects: "Choose data_surface_examples:call_to_action (Call to
+  action)."
+- **Three deep.** `ComponentSlots::DEPTH` is 3. The slots of the
+  component a block names are at depth 1, those of a component in one of
+  them at 2, and a slot at depth 3 holds text alone. The cap is in the
+  structure, so both documents state it: the def at the cap offers the
+  one kind `text`, and a component sent there is an unknown key. Every
+  level states each offered component's props and slots, so without a
+  cap the schema would not end.
+- **Each shape is one def, built once.** The provider lists every
+  variant's defs once (`VariantList::addDefs()`):
+  `component.props.<id>`, `component.slots.<id>.<depth>`,
+  `component.slot.<id>.<slot>.<depth>`, `component.slot.text`, and
+  `component.nested.<expected>.<depth>` for the component a slot holds,
+  named for what the slot expects (`any` for nothing in particular). A
+  read structure is built once per request and context and held at every
+  key it is attached at (`Resources::buildRead()`), and what a walker
+  asks of a child is answered once per child. On a site with three
+  hundred components whose slots expect nothing, a structure per place
+  it is used grows with the product of the components at each depth; a
+  structure per def grows with their sum: 2,465 defs and a build of
+  about two seconds on the development site. The documents and the tool
+  listing state none of them there: 312 components are past the site
+  list limit, so the props and slots are `refine` and the chosen
+  component's defs are the schema for these answers'
+  ([A budget for what the site decides](#a-budget-for-what-the-site-decides)).
+- **Rendering.** `ComponentBlock::build()` turns each stored slot into
+  `#slots`: text as `#plain_text`, a component as `#type => 'component'`
+  with its props held and its own `#slots`, a list as a render array of
+  each. A slot that holds nothing, or only components the site no longer
+  has, is not passed. The render array carries the built structure's
+  cacheability, both providers' lists; the block depends on the
+  extension of every component it embeds, at any depth.
+- **On the block form.** Text and one component are drawn at any depth,
+  a nested component's props and slots swapped over AJAX as the top's
+  are, each drawn from its own defaults where it was chosen afresh
+  (`DataSurfaceFormBuilder::nestedHeld()`), and a submission is read a
+  level at a time, each variant through what its own deciding key chose
+  (`DataSurfaceFormBuilder::extractFrame()`).
+  A list of components inside a slot is not drawn there: what it holds
+  is kept, and the tool, HTTP and the React page set it.
+
+*Open:* the `components` list on the block form; formatted text in a
+slot; a component that drops a prop a placed block still stores, whose
+edit is refused until the stored prop is removed; whether an empty
+`expected` is how a component should say it takes text; a slot's
+`examples`. (`Variants\ComponentSlots`, `VariantList::addDefs()`,
+`Resources::buildRead()`, `ComponentBlock::filled()`,
+`ComponentSlotsTest`, `ComponentBlockTest`, `BlockPlacementToolsTest`,
+`ComponentBlockAjaxTest`, `ReactNarrowingTest`)
+
+### A placed block is a resource
+
+Decided 2026-10-23. A placed block, the config entity `block.block.<id>`,
+is the resource `block.placement`, and the block plugin's settings are
+the variant its `plugin` key chooses. An agent places, configures, moves
+within its theme and removes a block through the tool door, HTTP and a
+form, each validated as any resource is. Each choice, and why:
+
+- **A submodule of its own, `data_surface_block`.** The placement is the
+  block layout's, not any plugin's: every plugin's settings are one
+  variant of it. So the general resource lives beside the block layout,
+  and the component block, one plugin, needs no resource of its own: its
+  stop-gap `block.placed_component` is removed, and example 13's calls
+  are the general resource's. Neither submodule depends on the other.
+  The component block renders without the placement, and the placement
+  offers whatever plugins the site has, the component block among them
+  when it is on. Rejected: renaming `data_surface_component_block`,
+  which would tie every placed block to one plugin's module.
+- **Three operations, by the machine name.** `create` creates under an `id`
+  the caller types, idempotent since the caller names it, and refuses an
+  id in use (code `taken`, from the storage); `update` takes the block and
+  holds its theme to the one it is in, so moving a block between themes
+  is not offered; `delete` deletes it. Each asks "administer blocks",
+  the block layout's permission.
+- **The settings are variants chosen by the plugin id.**
+  `attachVariants('settings', by: 'plugin', from:
+  BlockPluginStructures::class)`. The plugins are the ones the block
+  layout offers (`getFilteredDefinitions('block_ui')`, less the hidden
+  and the broken one), less any plugin that declares a context: which
+  context a placed block reads is open, so such plugins are not offered
+  yet, and the `plugin` key's description says so. A plugin whose class
+  carries `#[UsesStructure]` is its declared structure, built as
+  declared: `VariantList::addStructure()` names a structure class where
+  an entry otherwise carries a schema. Any other plugin is read with the
+  schema reader from `block.settings.<plugin id>`, resolved as typed
+  config resolves it (a wildcard type, and `block.settings.*` for a
+  plugin with none), less the keys every block has, written as JSON
+  Schema by `ConfigSchemaDocument`, the plugin's own defaults each key's
+  default. Why both: a declared structure keeps its refiners, children
+  and variants, which its schema read back would not (a coded refiner
+  cannot be read back), and the config schema is the one description a
+  plain plugin has. What a config schema says that JSON Schema says too
+  is carried (Choice, Range, Length, Count, NotBlank); the rest is left
+  to storage, which holds the whole block to its schema before anything
+  is written, so neither document is stricter than the block.
+- **The keys every block has are the resource's.** `label`,
+  `label_display` (a boolean, stored as core's `visible` or `0`),
+  `status`, `weight`, `theme` and `region`, beside `id`, `plugin`,
+  `settings` and `visibility`; the provider and the context mapping are
+  the storage's to write. Rejected: a structure mixed into every
+  variant, which would state the same keys in every variant's def, and
+  make a client read the chosen variant to find a block's title.
+- **The theme and the region.** The theme is core's `ExtensionExists`
+  (`theme`), which a new options resolver, `extension_exists`, reads as
+  the installed themes. The region is any installed theme's visible
+  region (`DataSurfaceAnyThemeRegion`) until the theme narrows it: a
+  static refiner adds `DataSurfaceThemeRegion` with the theme beside it,
+  and the one resolver answers the two together as that theme's visible
+  regions, the ones the block layout offers. Declared with a list, the
+  region is a select at every door from the start, which the React page,
+  choosing a widget once, needs. Both lists are cached by
+  `config:core.extension`. The themes can be
+  listed, so the full schema enumerates the region per theme
+  (`enumerated`), exact, rather than marking it `refine`. A region the
+  theme lacks is refused by name: "The olivero theme has no region named
+  header_nope."
+- **The visibility is a list of conditions.** Each item is `{id,
+  negate, settings}`, its settings the variant its condition id
+  chooses, from `ConditionPluginStructures`: the conditions the block
+  layout offers (those whose contexts the site can give, less the
+  current theme, and the language while the site has one), each its
+  declared structure or read from `condition.plugin.<id>`, with a
+  `context_mapping` of one key per context it reads, offering the
+  site's contexts that fit, the first the default, as the block layout
+  assigns it. Storage writes core's map by condition id and refuses a
+  condition held twice (`taken`, by its place in the list); a list of
+  strings is stored as core's map of each value to itself, the way the
+  block layout submits checkboxes. Rejected: a map keyed by condition
+  id, since keys from the site attach one structure per map and each
+  condition's settings differ.
+- **`ConfigEntityStorage` is a resource's storage.** Abstract, its
+  subclass naming `ENTITY_TYPE_ID` and `PROPERTIES` (a key to a
+  property, or to `['method' => 'setX']`), as `ConfigObjectStorage`
+  names its config object. `prepare()` copies the stored entity from its
+  exported array (a clone shares the plugin collections of the entity
+  the request holds), shapes the values onto it, calculates the
+  dependencies its save would, and holds it to its config schema, which
+  for a config entity is its validation; `commit()` saves that array.
+  The engine's class of the same name in `Pipeline\Storage\` is gone: no
+  host used it, and the naming review had found one short name for
+  three classes, core's included. `BlockPlacementStorage` adds the
+  settings, the visibility and the label to it; `NodeTypeStorage` is
+  rebuilt on it, its base field overrides beside, with no change to any
+  document.
+- **A delete takes no values.** `#[Operation(deletes: TRUE)]`, beside
+  `destructive: TRUE`, makes the kind `delete`. The pipeline accepts and
+  validates nothing: storage rehearses the removal
+  (`DeletableStorageInterface::prepareDelete()`) and removes it
+  (`delete()`); the values answered are what was stored, and `changes`
+  is `[""]`, the empty pointer, the whole thing. Values sent are refused
+  by name (`unknown_key`). Why a flag, not the name: whether a call
+  removes the thing is the author's fact, as whether it creates is, and
+  a name is how a door picks a default. Why nothing is validated: a
+  block whose region its theme dropped must still be removable.
+- **At each door.** The tool takes the parameters and `dry_run` and no
+  `values`, is a destructive Write, and has no read tool beside it.
+  HTTP serves a resource's default delete, the one named `delete` or
+  the only delete at a path, as `DELETE` on the thing's
+  path, with no body; it answers 200 with the result and no envelope or
+  `ETag`, the thing being gone, and takes `dryRun` and `If-Match` as any
+  write ([Contract 3](#contract-3-the-operation-is-the-method)); the
+  OpenAPI document follows. The operation form draws a confirmation: what
+  is removed, that it cannot be undone, and one button with the
+  operation's label.
+
+*Open:* context-aware plugins (a placed block's context mapping);
+moving a block between themes; Layout Builder's components; a block in
+a region its theme hides, which an update reads as stale; a block setting
+whose sequence is a keyed map, read as a list; the create form without
+JavaScript for a plugin's settings, which are drawn once the plugin is
+chosen. (`BlockPlacementResource`, `BlockPlacementStorage`,
+`BlockPluginStructures`, `ConditionPluginStructures`,
+`ConfigSchemaDocument`, `VisibilityConditionStructure`,
+`ThemeRegionOptions`, `AnyThemeRegionConstraint`, `ExtensionExistsOptions`,
+`Storage\ConfigEntityStorage`,
+`DeletableStorageInterface`, `DeletingStorageInterface`,
+`VariantList::addStructure()`, `BlockPlacementResourceTest`,
+`BlockPlacementToolsTest`, `BlockPlacementApiTest`,
+`BlockPlacementFormTest`, `BlockPlacementReactTest`,
+`ConfigEntityStorageTest`)
+
+### A listing is a read-only operation with outputs; a reorder is an update over the collection
+
+Decided 2026-10-23, with example 15, the first module of the series to
+declare a config entity type of its own, a venue, and put a resource
+over it from the start (`event.venue`). Two points the placement unit
+left open are settled on it: how the things a resource holds are
+listed, and how they are put in order.
+
+- **No new kind.** A listing is `readOnly: TRUE`, a read; a reorder is
+  neither, so it is an update. Both name no thing: they need no
+  parameter, and they are addressed at the collection. A `list` or
+  `search` kind was weighed and turned down: what a client needs to
+  know of a call is still whether it changes anything, may destroy
+  what is there, or creates, and a listing's answer is what its outputs
+  declare, which a kind would not add to.
+- **An operation may take keys of its own.** `#[Operation(values:
+  Structure::class)]` names the structure whose inputs a call takes and
+  whose outputs it answers, in place of the resource's keys: the
+  listing's `offset` (0 to 10000), `limit` (1 to 50, 20 by default) and
+  `status`, and its `items`, a list of `{id, label, capacity, weight}`,
+  and `total`; the reorder's `venues`, a collection of `{id, weight}`.
+  Why: a venue's keys (its name, its rooms) are not what a page or an
+  order is made of, and declaring the paging on the resource would put
+  it on every form and in the entity's config schema. The resource's
+  permission, access class and storage stay its own; the structure has
+  no identity and no storage, and one that has is refused when the
+  operation is built. The keys are no keys the storage holds, so none is
+  marked always held and the build does not hold them to the config
+  schema the storage writes to. Refused on a create and a delete, which
+  are about the thing's own keys.
+- **A read answers its outputs from prepare.** A read only operation is
+  never committed, so its outputs are what its storage's `prepare()`
+  answered under an output's name ([Who produces
+  outputs](#who-produces-outputs)): prepare is the last stage a read
+  runs, and one with no side effects. `VenueStorage` reads the venues
+  there, lighter first, and answers the page and the total. The tool
+  answers them beside the one result shape.
+- **`GET` on a collection picks the listing when one is declared.** The
+  default read of a collection is a listing where the resource has
+  identity: the read only operation named `list` or `read`, or the only
+  read there. `GET` runs it with the query string as its values, read
+  by the coercion table, and answers its outputs, `{items, total}`, with
+  a `Link` to its full schema, the collection's `.../schema`; a value
+  refused is 422. A resource with no listing answers `GET` on its
+  collection with its create's envelope, as before; with one, the
+  create's envelope is its custom method's, `GET .../{resource}:create`,
+  and the listing's envelope `GET .../{resource}:list`. Why the outputs
+  and not an envelope: the listing's answer is the thing a client asked
+  for, and it carries stored values, so it is never stored either, as
+  an envelope is not ([A served contract is never
+  stored](#a-served-contract-is-never-stored)); the reason contract 3
+  gave for no listing, that a listing carries stored values a client
+  caches, holds of a tool listing, which is a discovery channel, and not
+  of a `no-store` answer read when it is wanted.
+- **Items are filtered by access.** The operation's permission gates the
+  call (`view event venues`). Each venue is then asked the resource's
+  access answer in the listing's own context, knowing that venue's id:
+  the listing's permission, then the access class for that venue
+  (`Resources::access()`), and a venue whose answer is not allowed is
+  left out of the page and of the total. `VenueAccess` refuses a
+  disabled venue to an account without `administer event venues`,
+  which only the venue can say. Asking the update's answer, the read
+  tool's rule ([Reading asks what writing
+  asks](#reading-asks-what-writing-asks)), was weighed and turned down:
+  an account that may list the venues need not edit them.
+- **A reorder is an update over the collection, in one commit.** Its
+  storage loads every venue's id and weight; its `prepare()` refuses an
+  id that names no venue (`not_found`) and one named twice (`taken`),
+  each by its place in the list, and rehearses each named venue with its
+  new weight, held to its config schema; `commit()` saves them, all in
+  that one write. A venue left out keeps its weight. Its read tool
+  answers the current order. Why storage and not a `Choice` on the id:
+  the refusal names the venue and the position, and the full schema does
+  not list the venues, which change.
+- **On HTTP, an update over the collection is a custom method run with
+  `PATCH`.** The collection of a resource with identity has no default
+  update: `PATCH /surface-api/event.venue` would change every venue,
+  which no operation means. So the reorder is `PATCH
+  /surface-api/event.venue:reorder`, and every custom method of an
+  update is run with `PATCH`, as the default update is: the method says
+  the kind. A custom method of any other kind stays `POST`. The tool
+  test module's `append` and `clear`, the only custom updates before,
+  moved from `POST` to `PATCH` with it.
+- **The entity type's config schema is written from the resource.**
+  `drush data_surface:config-schema --write` writes
+  `data_surface_examples.event_venue.*` from `event.venue`, as it writes
+  a config object's: the rule [A config object is described by its
+  resource](#a-config-object-is-described-by-its-resource) applied to an
+  entity type a module declares. The entity class has no form classes,
+  no list builder and no links: the resource's routes add, edit and
+  remove a venue.
+- **Example 2 chooses from the venues.** Its venue and room are the
+  venue entities' (`EventVenue`, `EventVenueRoom` and, added by the
+  room's refiner, `RoomOfEventVenue`, read by one resolver under the
+  venues' list tag), so a venue added through example 15 is offered at
+  the next request with no cache rebuild. The shipped venues are the
+  hand-written list's, so example 2's documents are as they were, byte
+  for byte. A resolver may say its list is the whole of its constraint
+  (`#[DataSurfaceOptionsResolver(exact: TRUE)]`), as a `Choice`'s is,
+  and the emitter then names that constraint under no `checkedOnServer`.
+  *Open:* the capacity's cap per room still reads `Venues::seats()`: a
+  static refiner reads only what it watches and cannot say what site
+  state it read, so a room example 15 adds is offered with no cap on the
+  capacity until a refiner can read a site's list as a resolver does.
+
+*Open:* the placement resource may gain `list` the same way, a page of
+the placed blocks of a theme; a listing's next page as a link rather
+than an offset; a `sort` input. (`Operation::$values`,
+`OperationDefinition::$values`, `Resources::shapeOf()`,
+`StorageAdapter::outputs()`, `ServedPaths::listing()`,
+`ServedPaths::defaults()`, `ResourceApiController::listing()`,
+`OpenApiDocument::listed()`, `ConfigSchemaGenerator::describeEntityType()`,
+`DataSurfaceOptions::isStatedByList()`, `VenueResource`, `VenueStorage`,
+`VenueAccess`, `EventVenue`, `VenueResourceTest`, `VenueApiTest`)
+
+### A reference is an id with a list the site decides, listed or looked up
+
+Decided 2026-10-23, with example 16, the sponsorship
+(`event.sponsorship`): a key that refers to an entity.
+
+- **One spelling, the data type string.** `add('venue',
+  'entity:event_venue', ...)`, `add('contact', 'entity:user', ...)`,
+  `add('page', 'entity:node:article', ...)` and the bare `add('thing',
+  'entity', ...)`: typed data's own names for an entity, an entity of a
+  type and one of a bundle, so an author writes what core already calls
+  it. Why not a verb of its own, `reference()`: the type string says the
+  type and the bundle in the place a type is said, and `add()` returns
+  the definition the rest is written on, as for any key.
+- **The value is the id.** The key holds the entity's id as the entity
+  type keeps it, an integer where a content entity type's id field is
+  one and a string for a config entity, never the entity object: what is
+  stored, sent and answered is the id, at every door. The tool door
+  keeps the bridge's own representation, which already sends an
+  operation's entity parameter as its id (`OperationInputs::parameterInput()`):
+  the Tool API's `EntityInputDefinition` would hand the pipeline a
+  loaded entity, and nothing in `values` is typed that way, so a
+  reference in `values` is the id there too. The read tool answers the
+  id and no label beside it: its answer is the write's values, and a
+  label is no key of the resource; both documents label each listed id
+  in their `oneOf`, and the lookup answers labels for the rest. A uuid
+  representation stays open.
+- **The bare `entity` is two keys, narrowed by a refiner.** An entity
+  type, then an id, attached at the key: `entity_type`, a choice of the
+  entity types the account may reference one of, and `id`, a string,
+  which a static refiner narrows to the entity type chosen with the
+  constraint `entity:<type>` builds. So one mechanism serves all three
+  spellings, and since the refiner is static the full schema states the
+  id once per entity type as a conditional, which a client narrows from
+  with no round trip. The parts are registered per key
+  (`ResourceRegistry::defineReference()`), as a structure read from a
+  schema is, because what the author narrowed the key by is the key's:
+  `DataSurfaceReferenceableType` written on the key (`interface`,
+  `targets`) is moved onto `entity_type` when the parts are built. A
+  parent cannot name a key inside its child; this is the build writing
+  the child from what the parent declared, not the parent reaching in.
+- **The selection plugin for candidates and access.** Core's entity
+  reference selection handler, `default:<type>` with the bundles as its
+  `target_bundles` and the label as its `sort`, answers the options, the
+  lookup and the check, for the account asking: one answer in three
+  places, and the access filtering is the handler's query's own (a
+  node's unpublished nodes, a user's blocked users, node grants). The
+  check is core's `ValidReference` for a key that holds one id
+  (`DataSurfaceValidReference`, its subclass): core's validator reads
+  the handler off a field's item list, and a key has no field. One
+  message for every refusal, core's "This entity (%type: %id) cannot be
+  referenced.", so a refusal never says whether an entity the account
+  cannot see exists. Rejected: a `Choice` filled at build, which needs
+  services in a static class and cannot say "any id the handler
+  accepts" past the limit.
+- **The threshold, `data_surface.settings:reference_enum_limit`.** Up to
+  it (50 as shipped) the key lists its candidates: a select, a `oneOf`
+  with labels in both documents, an enum in the tool listing, narrowed
+  by a client locally. Past it the key is an id: core's
+  `entity_autocomplete` on the form, `x-surface.widget: autocomplete`
+  and the constraint under `checkedOnServer` in both documents, and a
+  sentence in the tool listing naming the lookup. Why a setting and not
+  the enumeration cap: the cap counts conditionals a document can
+  afford; the limit counts what a person scans and what a tool listing
+  should carry, which a site decides. Field references
+  (`ReferenceableOptions`) read the same limit, where they read the cap.
+  Its sibling, `site_list_limit`, counts the variants and the keys a
+  site lists ([A budget for what the site decides](#a-budget-for-what-the-site-decides)).
+  The list's cacheability carries the settings' tag; an answer past the
+  limit carries nothing and is the wider one, so a cached document is
+  never stricter than the site.
+- **The lookup is a custom read.** `GET
+  /surface-api/{resource}[/{id}]:lookup?key=/venue&q=riv`, every
+  resource path's, answered for the operation `GET` serves there, gated
+  as it is, through the same handler, ids and labels. Why a custom
+  method and not an operation each resource declares: it is the same for
+  every resource and needs nothing of one; a resource that declares an
+  operation named `lookup` keeps it. The tool listing names it in the
+  key's description, since an agent reads the listing first ("Too many to
+  list (more than 50): send the id of one; GET ...:lookup?key=/contact&q={text}
+  looks one up by its label."); the React app's autocomplete calls it.
+- **A marker on the wire.** `x-surface.reference: {entityType,
+  bundles?}` on every reference key in both documents, listed or not, and
+  `{by: "entity_type"}` on a bare key's id: the reference keyword the
+  Portable Schema notes argued for, as an `x-surface` keyword, so a
+  client that does not read it reads an id of the key's type.
+
+*Open:* a uuid representation; a multi-value reference, a list of
+references (`addList()` of an entity type); the entity side's two
+shapes, a reference field's `target_id` item (`DataSurfaceReferenceable`,
+no marker) beside a reference key; a lookup tool for an agent with no
+HTTP; a custom method's own lookup; a stored id the account may no
+longer reference, which core's field validator keeps and this refuses.
+(`References`, `EntityReferenceStructure`, `ValidReferenceConstraint`,
+`ReferenceableTypeConstraint`, `ReferenceOptions`,
+`ReferenceableTypeOptions`, `AutocompleteWidget`,
+`ResourceRegistry::defineReference()`, `ServedPaths::LOOKUP`,
+`ResourceApiController::lookup()`, `InputDefinitions::withLookups()`,
+`OpenApiDocument::lookup()`, `SponsorshipResource`, `ReferenceKeysTest`,
+`ReferenceKeysFormTest`)
 
 ## Examples
 
@@ -3788,6 +4886,21 @@ Generating it would need a kernel for the answers and a generator for
 prose written for a viewer; a drift test keeps the prose free and the
 code true.
 
+### An example names its files
+
+Each example lists the files it is made of once, in `Series`: its
+resource, storage, structures, shapes, providers, access class, alters,
+components, route, config schema entries and shipped settings, each with
+a line saying what it is. Its page lists them (`FilesPanel`), a file of
+fewer than 80 lines of code shown whole and collapsed, because the
+newcomer logs found whole files were what stopped the guessing; the
+landing page reads its reading order from the same list, and the
+README's Files tables are held to it by `ExampleFilesTest`, which also
+fails when the examples have a part no example lists. The links name a
+branch from `$settings['data_surface_examples_branch']`, `next` by
+default: asking git on every request costs a process, and a site need
+not be a checkout.
+
 ## Served contract
 
 ### The emitter is the main module's, and widgets are asked for
@@ -3799,7 +4912,7 @@ canonical contract the operation form's contract panel shows and
 contract, so `x-surface.widget`, the Form API mapping said for a
 renderer, and `multiple`, its qualifier, are written only when a caller
 passes `widgets: TRUE`; `data_surface_react` does, for its app. The rest
-of `x-surface` (locked, dependsOn, refined, stale, emptyOption, by,
+of `x-surface` (locked, dependsOn, refined, stale, emptyOption, fixed, by,
 variants and chosen, rules, within, checkedOnServer, enumerated,
 refine, live) is the
 data surface's own reading of a key, not a widget, and is always written.
@@ -3937,8 +5050,114 @@ boolean or a key an alter mounted stays `refine` whatever the count:
 its domain is not a list, so there is nothing to enumerate, and
 inventing one (sampling numbers, guessing at a license) would state a
 rule the refiners never made. Such a key keeps `dependsOn`, and a client
-asks `/refine` when a watched key changes, as before.
+asks the server (`POST .../schema`) when a watched key changes, as before.
+A list the site decides is counted otherwise, by its entries, against a
+setting ([A budget for what the site decides](#a-budget-for-what-the-site-decides)).
 (`ContractEmitter::enumerate()`)
+
+### A budget for what the site decides
+
+Decided 2026-10-24, with examples 12 and 13 on the development site,
+whose themes provide 312 components. A list the site decides is spelled
+out in the full schema and the tool listing while it has at most
+`data_surface.settings:site_list_limit` entries, 20 as shipped: one
+setting beside `reference_enum_limit`, with the same schema and a
+post-update of its own. Two kinds of key take their list from the site:
+variants from the site (`attachVariants(from:)`, and the variants inside
+a structure read from a schema, a component in a slot) and keys from the
+site (`addEach()`, `attachEach()`). Each key is counted at its own
+level: a component in a slot counts the components the slot offers.
+
+- **Past the limit, open and `refine`.** In the full schema a key with
+  variants is an open object marked `x-surface.refine: true`, with
+  `x-surface.by` naming its deciding key and no def and no conditional
+  per variant. A map of keys from the site is an open object marked
+  `refine`, its entries under `x-surface.entries` by id and label alone.
+  The tool listing states both as an open map, and its description
+  names the narrowing tool: "Too many to list: choose component, then
+  call data_surface:event.spotlight:configure:schema with your values to
+  get this key's schema." The schema for these answers, built with the
+  deciding key's value known, states the chosen variant exactly: its def
+  and its one conditional, and no other variant's, since the narrowing
+  is what a client asks for one variant; with every variant in it, the
+  spotlight's narrowing answered 3.5 MB. With nothing chosen it is open,
+  as in the full schema. It states every key from the site, which has no
+  deciding key.
+- **Why a count and not a smaller depth cap.** The size is the number of
+  variants at each level, not the depth: three deep, 312 components were
+  2,465 defs, and one level deep they would still be 312 defs and 624
+  conditionals. A lower `ComponentSlots::DEPTH` would cut what a slot may
+  hold on every site, the one with four components included, where
+  everything fits. A count keeps the depth, spells out what a reader can
+  scan, and moves only the listing of every variant to a request, so a
+  site with few components keeps its exact documents.
+- **Why `refine` and not `live`.** The rule is static: the provider's
+  list is cacheable and the same for every account, and which variant a
+  value chooses is a pure function of the value. Nothing about it is
+  unknown ahead of time; it is too long to write. `refine` already says
+  "static, not captured here: ask `POST .../schema` with values", and a
+  client that handles it, the React page among them, needs nothing new.
+  `live` says a rule no schema can state, which would tell a client the
+  answer may change between two requests with the same values.
+- **Why the chooser's options are always listed.** The deciding key's
+  `oneOf` is one id and one label per variant: 312 of them are 18 KB. A
+  client cannot ask for a variant's keys without a value to send, and an
+  agent cannot choose a value it was not shown.
+- **Why a setting.** As the reference limit: the count is what a person
+  scans and a tool listing should carry, which the site decides. Whether
+  a key is spelled out is the setting's, so a document with a list the
+  site decides carries the settings' cache tag, and the tool listing is
+  derived again when the setting changes.
+- **The narrowing tool.** Where an operation's declared listing has such
+  a key, at any depth (`SiteListBudget::anyOver()`), `data_surface_tool`
+  derives `data_surface:<resource>:<operation>:schema` beside the write
+  tool: the Read kind, so read only and idempotent, its inputs the
+  operation's parameters and an optional open `values`, its outputs
+  `schema` and `values`, what `POST .../schema` answers for the same
+  values and account, with no widget hints. A resource whose lists are
+  all spelled out adds no tool. Its definition is cached for every
+  account, as every tool's is; its answer is built for the account that
+  calls it. Why a tool and not a sentence naming the HTTP path, as the
+  lookup's does: an agent over MCP may have no HTTP client, and the
+  narrowing needs the operation's parameters and access, which a tool
+  call carries.
+- **The catalog.** `drush surface:catalog --resource=<id>` and its page
+  list the values of variants past the limit and do not walk their keys:
+  one walk per place a structure is used grows with the product of the
+  lists, which exhausted 3 GB for the placed block here. Each variant's
+  structure is still listed among those read from a schema.
+- **Read back.** The reader reads an open `refine` key with a deciding
+  key and no variant as an object like any other, since no variant is in
+  the document (`SchemaReader::variantsAt()`); a full schema past the
+  limit does not read back to itself, and `ResourceTestBase` reports it
+  by its kind, `site list`.
+
+On the development site, 312 components, measured 2026-10-24 in one
+process each:
+
+| What | Before | After |
+| --- | --- | --- |
+| Example 12's full schema | 3,063,070 bytes, 2,465 defs | 17,818 bytes, no def |
+| Its schema for these answers, the card chosen | 3,541,592 bytes, 2,465 defs | 21,426 bytes, 3 defs |
+| Its tool definition, inputs and outputs | 1,635,361 bytes | 12,409 bytes |
+| The placed block's full schema, create | 3,201,610 bytes, 2,506 defs | 19,400 bytes, 6 defs |
+| Its tool definition, create | 27,225 bytes | 10,298 bytes |
+| `drush surface:catalog --resource=block.placement` | memory exhausted at 3 GB | 232 MB peak, 3.9 s |
+| `/admin/config/development/surfaces/block.placement` | memory exhausted at 3 GB | 232 MB peak |
+| `/admin/config/development/surfaces` | 242 MB peak | 230 MB peak |
+
+The build is unchanged: it still reads every component's structure,
+since the form and the pipeline hold the chosen one to its keys.
+
+*Open:* a key `refine` for another reason (a watched number, too many
+combinations) has no narrowing tool; variants a class declares or a
+deriver derives are not counted (a field type's settings, a list the
+site's modules decide too); the build of a resource still reads every
+variant. (`Contract\SiteListBudget`, `ContractEmitter::variants()`,
+`InputDefinitions::tooMany()`, `OperationInputs::narrows()`,
+`ResourceOperationSchemaTool`, `SiteCatalog::keys()`,
+`SiteListBudgetTest`, `CatalogMemoryTest`,
+`AdvertisedSchemaAcceptanceTest::testListsPastTheSiteListLimit()`)
 
 ### A served contract is never stored
 
@@ -4137,8 +5356,11 @@ A secret is advertised optional in both documents and the tool's
 what is stored (the codec's keep-on-empty); its type is the declared
 one, not nullable, `writeOnly`, with no default; the values a document
 carries for it are `null`, as the masking rule has always said, which a
-reader takes as the key left out. A required secret never set is still
-refused by the pipeline as missing. Before 2026-10-18 a required secret
+reader takes as the key left out; an accepted document leaves a secret
+that holds nothing out (`DataSurfacePipelineInterface::document()`,
+2026-10-23, found by example 14's webhook, whose key ships empty). A
+required secret never set is still refused by the pipeline as missing.
+Before 2026-10-18 a required secret
 was in `required` and its type refused the `null` its own `values`
 carried. (`ContractEmitter::required()`, `InputDefinitions::fromDefinition()`)
 
@@ -4279,6 +5501,11 @@ description read as both of its forms with a literal `@count`.
 
 ### A refused submit is an answer
 
+*Superseded 2026-10-22 by [contract 3](#contract-3-the-operation-is-the-method):
+a refusal is a 422, problem details whose `errors` are the violations,
+with `notes` and `stale` beside them; the entries a client branches on
+are unchanged.*
+
 `POST .../submit` answers a refusal with 200 and `committed: false`,
 the violations as data, never 422 or 400: a value the pipeline refuses
 is the expected outcome of asking, exactly as `/validate` reports it and
@@ -4296,12 +5523,16 @@ door](#one-result-at-every-door)). (`ResourceApiController::submit()`)
 Where a created thing now lives is read from the outputs and the
 identity the write accepted, and checked against the operation those
 build; an identity key the write left empty is not compared, since it
-named nothing: a content entity's add knows its id as empty, and its
+named nothing: a content entity's create knows its id as empty, and its
 `id` output says what storage made it. Before, every accepted identity
-key was compared, and an add whose id storage gives could never say
+key was compared, and a create whose id storage gives could never say
 where its thing lives. (`ServedOperations::created()`)
 
 ### A fingerprint is opt-in
+
+*Since [contract 3](#contract-3-the-operation-is-the-method) the
+fingerprint is the read's `ETag`, sent back in `If-Match`, and a
+mismatch is a 412; still opt-in.*
 
 The contract carries a fingerprint of the stored values it was built
 from, and a submit that sends it back is refused, nothing written, when
@@ -4318,14 +5549,15 @@ window to the moment between the comparison and the commit.
 ### The page resolves what the schema states
 
 The React page narrows a change itself when the full schema states the
-answer, and asks `/refine` for the rest. On a change it collects every
+answer, and asks the server for the rest (`POST .../schema`, `/refine`
+until contract 3). On a change it collects every
 key that depends on the changed one, transitively, through `dependsOn`;
 when none is marked `refine` or `live`, nor holds one inside it, it
 reads each from the full schema's conditionals for the new values and
 sends nothing. When one is, or the resolver meets anything it cannot
 read (a stale value it was handed as `null`, a reference left
 unresolved, a conditional naming a key outside its frame), it posts to
-`/refine` as before. Validate and submit always ask: the pipeline has
+the values to `.../schema` as before. A dry run and a write always ask: the pipeline has
 the last word.
 
 The full schema is fetched once, beside the contract, and never again
@@ -4339,10 +5571,10 @@ on. A site that changes an option list during a session (a bundle
 added) is answered by the server where it matters, on validate and
 submit. The page reads one contract version: a document or an answer of
 another, by its `Contract-Version` header or its `x-surface.contract`,
-is refused, not read ([Contract 2](#contract-2)).
+is refused, not read ([Contract 3](#contract-3-the-operation-is-the-method)).
 
 The page's settling mirrors the server's exactly, orphans included,
-because a local answer is a stand-in for `/refine`'s and must be the
+because a local answer is a stand-in for the server's narrowing and must be the
 same answer. An orphan is what makes a save judge the right thing: the
 stored room under a moved venue is shown on the empty option and its
 path travels back stale, so the pipeline reads it as the stored value
@@ -4352,11 +5584,16 @@ never draws and send values the server would have dropped. So the page
 applies the same discard rule and the same fixed point, down to
 re-settling every orphan on every change (a capacity typed under an
 orphaned room falls back to what is stored when the pricing changes),
-and a Vitest test holds it to recorded `/refine` answers for examples 2
+and a Vitest test holds it to recorded narrowing answers for examples 2
 and 3, keyword for keyword. (`narrow()` in `app/src/contract.ts`,
 `ResourceApiController::schema()`)
 
 ### Contract 2
+
+*Superseded 2026-10-22 by [contract 3](#contract-3-the-operation-is-the-method),
+which kept both documents as contract 2 writes them and changed the HTTP
+door: the five endpoints of an operation answer 410 now, naming the
+method and path that replace each, and every path is a JSON Pointer.*
 
 Decided 2026-10-20, from the DX reviews (group E of
 `docs/reviews-2026-10-20/synthesis.md`: section 1, B21 to B24; section
@@ -4466,13 +5703,232 @@ published yet. (`ContractEmitter::CONTRACT`, `ContractEmitter::settled()`,
 `ResourceApiController::VERSION_HEADER`, `CONTRACT` and
 `assertContract()` in `app/src/contract.ts`)
 
+### Contract 3: the operation is the method
+
+Decided 2026-10-22, from the owner's finding: on HTTP each named
+operation had grown five endpoints (`.../configure`, `/schema`,
+`/refine`, `/validate`, `/submit`), so the operation did not act like
+one, and `configure/submit` was a verb on a verb. The tool door already
+had it right: one tool per operation, with a `dry_run` flag. Contract 3
+rebuilds the HTTP door on the standard shape: the path is the resource,
+the method is the operation. `ContractEmitter::CONTRACT` is 3, the
+`Contract-Version` header says `3`, and the baselines were re-pinned
+(`ContractBaselineTest` with `DATA_SURFACE_CONTRACT_WRITE=1`, the site the
+suite builds; `drush data_surface:contract-diff --write` on the demo site
+would pin that site's own components as variants). Both documents are written exactly as contract 2 wrote them
+but for `x-surface.contract`; what changed is the door, and how every
+door spells a path. The endpoint table is in
+[the served contract](served-contract.md#the-api).
+
+- **The path is the resource.** A singleton (no identity keys) is
+  `/surface-api/{resource}`; one thing with identity is
+  `/surface-api/{resource}/{id}`, its identity as path segments in
+  declaration order, joined by `/` when there is more than one (up to
+  four). Why: a client reads a resource and writes it at one URL, as
+  HTTP means it, and an operation's name is the method's, not a path
+  segment. The identity segments are the parameters of the operation
+  that addresses the thing, which are the resource's identity keys where
+  the operation is asked by them (`node.type`'s `type`) and the thing's
+  own id where it is asked by that (a content entity's `id`, a field's
+  `field`, `node.article.field_x`): `field.instance` declares four
+  identity keys, and its update takes none of them by name, so a path made
+  of the identity keys could not be mapped to the call. An operation
+  addresses one thing when its resource has identity, it does not
+  create, and it needs a parameter; any other is addressed at the
+  collection, `/surface-api/{resource}`, its parameters in the query
+  string (`field.instance`'s create, `?entity_type_id=node&bundle=article`).
+  (`ServedPaths::placement()`)
+- **The method is the operation.** At each path, `GET` reads, `PATCH` is
+  the default update and `POST` on the collection the default create.
+  The default of a kind is the operation whose id is the kind's standard
+  one (`create`, `update`, `read` or `list`, `delete`), or `configure`
+  for an update on a singleton; else the only operation of that kind at
+  the path; else none, two of a kind with neither named so leaving the
+  kind with no default, and every operation of it is a custom method.
+  *Changed 2026-10-23:* the names were Drupal's words (`add`;
+  `configure` or `edit`; `remove`), and are the standard five now,
+  Drupal's words kept in the labels ([The ids are the standard
+  five](#the-ids-are-the-standard-five-the-labels-are-drupals)). A read
+  is a default only where no update is: `GET` on a path answers what is
+  stored, and with an update there, it is the update's envelope, the
+  values a `PATCH` changes; a read-only operation beside it (example
+  10's `check`, which takes values and checks them) is a call of its
+  own. `GET` on a collection with no update or read answers the default
+  create's envelope, its declared defaults and the schema a `POST`
+  takes: there is no listing, since a listing would carry stored values
+  a client caches ([Required is the
+  resource's](#required-is-the-resources-and-an-update-tool-requires-nothing-at-its-door)).
+  *Changed 2026-10-23:* where a resource with identity declares a read
+  only operation that names no thing, `GET` on its collection answers
+  that listing's outputs, its query string the values; else the default
+  create's envelope as before. The collection of a resource with
+  identity has no default update, and a custom method of an update is
+  run with `PATCH` ([A listing is a read-only operation with
+  outputs](#a-listing-is-a-read-only-operation-with-outputs-a-reorder-is-an-update-over-the-collection)).
+  *Added 2026-10-23:* `DELETE` on a path is its default delete, the
+  operation named `delete`, or else the only delete there: it takes no
+  body, answers 200 with the result, and leaves no envelope or `ETag`,
+  the thing being gone; a delete that is not a default is a custom
+  method, `POST .../{x}:{operation}`, as any other ([A placed block is a
+  resource](#a-placed-block-is-a-resource)). (`ServedPaths::defaults()`,
+  `ServedPaths::writes()`)
+- **A custom method for the rest.** Any other operation, of any kind, is
+  `:{operation}` after the last segment of the path it addresses:
+  `GET /surface-api/event.program:check` its envelope, `POST` a run of
+  it, `.../event.program:check/schema` its schema; `field.instance:reuse`
+  on the collection. The custom-method convention of resource-oriented
+  API design, because it keeps the resource as the path and names the
+  verb once, where a client looks for it. A default operation may be
+  named this way too. A resource id that carries a colon itself
+  (`entity.content:node.page`) is read whole first. Drupal's URL
+  generator encodes the colon; the module writes it back as a colon,
+  which RFC 3986 allows in a segment, and reads either.
+- **The read is the envelope.** `GET` answers `resource`, `operation`,
+  `label`, `schema` (the schema for these answers), `values`, `stale`,
+  `outputs` when declared, and `notes`, one entry per stale path, code
+  `stale`, as a write's result says a stale value it keeps. The
+  fingerprint left the body: it is the `ETag`, strong, since it names
+  the stored values whatever the bytes of the document, and `Link:
+  <.../schema>; rel="describedby"` names the full schema. The response
+  is `Cache-Control: no-store, private`: never stored, as before, and
+  saying so keeps the `ETag`, which core strips from a response it
+  marks uncacheable itself.
+- **The schema is a resource of its own.** `GET .../schema` answers the
+  full schema itself, `application/schema+json`, not an envelope around
+  it: a JSON Schema document at its own URL, the URL its `$id` and the
+  envelope's `Link` name. `POST .../schema` with a values document,
+  partial or whole, answers the envelope narrowed for those values: the
+  old `/refine`, renamed and re-homed as "the schema, given these
+  values". It answers the envelope, not the schema alone, because a
+  schema for values is read with the values it was narrowed for: an
+  orphan is shown `null` and stale, and `discarded` names the answers
+  the new choices dropped. A query: `x-surface-kind: read` in the OpenAPI
+  document, nothing written. Being a POST it still takes the session's
+  CSRF token, as core asks of every unsafe method on the route.
+- **A write's body is the values.** `PATCH` and `POST` take the values
+  document directly, no `values` wrapper, `PATCH` as
+  `application/merge-patch+json` (RFC 7396, whose rule is the module's
+  own, [absent keeps, null clears](#absent-keeps-null-clears)) or
+  `application/json`; another media type is a 415. The operation's
+  parameters come from the path and the query string; the body's
+  `parameters` are gone. The stale paths stay, in the `X-Surface-Stale`
+  request header, JSON Pointers separated by commas: leaving a stale key
+  out keeps its stored value at the top of a document, but an item of a
+  collection is sent whole, and only the path can say "keep what is
+  stored" inside it, as the form's marker does. The React app sends the
+  header.
+- **`If-Match`, not a body fingerprint.** A write sending `If-Match` is
+  refused with 412, nothing written, when the stored values changed since
+  that `ETag` was served; without it the last write wins, opt-in as
+  before ([A fingerprint is opt-in](#a-fingerprint-is-opt-in)). `*`
+  matches whatever is stored. A tag is compared by its opaque value, weak
+  or strong, which RFC 9110's strong comparison does not do: a
+  compressing proxy weakens the tag it passes on (the local ddev router
+  does), and the tag names the stored values, which compression does not
+  change, so refusing the weakened tag would refuse every client behind
+  such a proxy.
+- **A dry run is a query parameter.** `?dryRun=true` replaces
+  `/validate`: the write runs through prepare and stops before commit,
+  and answers as a successful write would, the result and its `outputs`,
+  `contract` and `created` (empty), with `x-surface-dry-run: true` added.
+  Always 200, never 201 and never a `Location`: nothing was created.
+  `If-Match` is checked on a dry run too, so a rehearsal fails where the
+  write would.
+- **A create answers 201.** A written create answers 201 with
+  `Location`, the created thing's read
+  (`/surface-api/node.type/recipe`), from where
+  [it now lives](served-contract.md#where-a-created-thing-lives); with
+  no operation that addresses it (a field added to a bundle), 201 with
+  no `Location`. The body keeps `created`, which the React page moves
+  to. This closes the point the OpenAPI entry left open.
+- **A refusal is problem details.** RFC 9457, `application/problem+json`,
+  for every error of the API: `type`, `title`, `status`, `detail`, and
+  for a refusal (422) `errors`, the result's violations, with `notes` and
+  `stale` as extensions; a 412 carries its one `conflict` error. A
+  refusal is no longer a 200 ([A refused submit is an
+  answer](#a-refused-submit-is-an-answer) is superseded): the status says
+  what happened before the body is read, which HTTP tooling (a generated
+  client, Swagger UI, a retry policy) acts on, while the body keeps the
+  one result's entries, so a program branches on `errors[].code` as it
+  did on `violations[].code`. A refusal the pipeline makes of the whole
+  call by access or permission is a 403 and one of a subject that names
+  nothing a 404, with the same members; a resource locked whole is a 422,
+  code `locked`, since the caller was let in and the values are what is
+  refused. A 403 the route's access check gives, a 404 or 405 of the
+  path, a 400 of the body and a 415 are problem details too, never
+  Drupal's HTML page (`ProblemDetailsSubscriber`). Three types are the
+  module's own, a URI under this module's served contract page:
+  `#refused` (422), `#conflict` (412) and `#gone` (410); every other
+  status is `about:blank`, its title the reason phrase.
+- **Every path is a JSON Pointer.** A path in a result, at every door,
+  is a JSON Pointer (RFC 6901): `/contact/email`, the whole call the
+  empty pointer, `~` and `/` in a key escaped. The write tool's result
+  and its text lines, `drush tool:run --json`, the HTTP results and
+  problem details, the envelope's `stale` and `notes`, the narrowing's
+  `discarded` and the `X-Surface-Stale` header. Why: one spelling a
+  client can resolve against the document without knowing the module's
+  dotted convention, the one JSON Schema itself uses (`within`, every
+  `$ref`). Not changed: a message still names a key it depends on the
+  way its renderer does, and the form names an element as the form does;
+  inside the pipeline a violation keeps its dotted path, and
+  `ResultDocument::pointer()` writes it at the door
+  ([One result at every door](#one-result-at-every-door)). The write
+  tool's output definitions say "JSON Pointer" where they said "dotted
+  path", the one change to the Tool API and MCP door's definitions.
+- **Contract 2's paths are gone, not redirected.** Every contract 2 path
+  (`.../{operation}`, `/schema`, `/refine`, `/validate`, `/submit`)
+  answers 410 with problem details naming the method and path that
+  replace it, `moved: {method, href}`, the old query's parameters moved
+  into the path (`GET /surface-api/node.type/edit?type=article` names
+  `GET /surface-api/node.type/article`). A redirect would turn a POST
+  into a GET or resend a body to a URL that reads it differently; a 410
+  tells a client its call changed shape. The price: a second segment
+  that names one of the resource's operations is read as a contract 2
+  path, so a thing whose id is an operation's id (a content type named
+  `update`) cannot be addressed by its path, and neither can one whose
+  id is `schema`. *Changed 2026-10-23:* contract 2's paths carried the
+  ids of then, `add`, `edit` and `remove`, so those three are read as
+  the operation renamed from them (`.../node.type/edit` as `update`'s)
+  and stay gone, not 404 (`ServedPaths::CONTRACT_2_IDS`); a thing
+  named `edit` is not addressable by its path either.
+- **The OpenAPI document follows.** One path item per resource path,
+  the methods on it, custom methods as path items of their own, each
+  with a `/schema` path item; an operation that addresses one thing is
+  now described, its identity as path parameters and its schema built
+  knowing no subject, as its tool's listing is, which closes the point
+  [An OpenAPI document is one more door](#an-openapi-document-is-one-more-door)
+  left open.
+- **Swagger UI and Redoc.** `GET /surface-api/docs` renders Swagger UI
+  and `GET /surface-api/redoc` Redoc over the OpenAPI document, each from
+  a CDN as a Drupal library, the version pinned and every file held to
+  its integrity hash. Swagger UI's "try it out" calls the API with the
+  logged-in session: a write carries the token `/session/token` answers
+  and, as `If-Match`, the last `ETag` an answer for the same path
+  carried. The JSON stays open, as before; the two pages are under a
+  permission of their own, `access data surface api docs`, because each
+  runs a CDN's script on the site's origin, which a site grants to the
+  roles it chooses, and `access content` belongs to node, which the
+  submodule does not need.
+
+The tool and HTTP doors now agree: one operation, one call, a dry run as
+a flag. (`ServedPaths`, `ServedTarget`, `ResourceApiController`,
+`ProblemDetails`, `ProblemException`, `ProblemDetailsSubscriber`,
+`ServedOperationAccessCheck`, `ResultDocument::pointer()`,
+`OpenApiDocument`, `OpenApiController::docs()`,
+`OpenApiController::reference()`, `ServedPathsTest`,
+`ServedContractEndpointsTest`, `ServedSubmitEndpointTest`,
+`ResultPointersTest`, `OpenApiDocumentTest`, `OpenApiEndpointTest`)
+
 ### An OpenAPI document is one more door
 
 `data_surface_openapi` serves `GET /surface-api/openapi.json` (and
-`.yaml`): an OpenAPI 3.1 document of the five endpoints of
-`data_surface_react` for every operation that can be asked on its own
-and needs no subject, so any OpenAPI client, generator or UI drives a
-resource without reading these pages. Decided 2026-10-21.
+`.yaml`): an OpenAPI 3.1 document of the API of `data_surface_react`
+for every operation that can be asked on its own, so any OpenAPI
+client, generator or UI drives a resource without reading these pages.
+Decided 2026-10-21; its paths are contract 3's since 2026-10-22
+([Contract 3](#contract-3-the-operation-is-the-method)): one path item
+per resource path, the methods on it, custom methods and `/schema` as
+path items of their own.
 
 - **3.1, because the schemas are JSON Schema 2020-12.** A 3.1 schema
   object is a 2020-12 schema, so each operation's full schema goes in as
@@ -4517,7 +5973,7 @@ resource without reading these pages. Decided 2026-10-21.
   the components are the full schema byte for byte, which a test holds
   for every operation.
 - **An update takes a patch.** A key an update leaves out keeps what is
-  stored, so its validate and submit bodies take the values component
+  stored, so its request body takes the values component
   with every `required` dropped where dropping only widens: never inside
   an `if`, a `not`, a `oneOf` or a `contains`, never inside a list's
   `items` (an item is sent whole). A create takes the full schema: it
@@ -4535,27 +5991,32 @@ resource without reading these pages. Decided 2026-10-21.
   make the body stricter than the door. The rule took the components
   from 147 to 140 on the demo site (40 patches to 26, 7 outputs
   components added).
-- **Facts to HTTP.** A read only operation has its two GETs alone. How
-  the operation behaves is stated beside each call as `x-surface-kind`,
-  and on the submit as `x-surface-idempotent`, `x-surface-destructive`
-  and `x-surface-creates` (on a read's GET contract); its label is the
-  summary and its description the description. `creates` does not pick
-  `201`: the submit answers 200 whether it refused, wrote or created,
-  with `created` saying where a created thing lives, and the document
-  says what the endpoint answers. *Open:* a committed create answering
-  `201`, a change to the endpoint and its app.
-- **The envelope and the result as components.** `Contract` (the served
-  document: `resource`, `operation`, `label`, `schema`, `values`,
-  `stale`, `outputs`, `fingerprint`, `discarded`), `FullSchema`,
-  `Result` (the one result, `{path, code, message}` entries in
-  `ResultEntry`, `notes` among them), `SubmitResult` and `Created`
-  are shared. A refusal is a 200 `Result` with `ok: false`; a 403 is
-  Drupal's own error page and has no body schema.
+- **Facts to HTTP.** How the operation behaves is stated beside each
+  call as `x-surface-kind`, and on its run as `x-surface-idempotent`,
+  `x-surface-destructive` and `x-surface-creates`; its label is the
+  summary and its description the description. Since contract 3 a run
+  answers 200, a written create 201 with a `Location` header, a refusal
+  422 and a stale `If-Match` 412, each error `ProblemDetails`;
+  `dryRun` is a query parameter and `If-Match`, `X-Surface-Stale` and
+  `X-CSRF-Token` header parameters; the read answers an `ETag` and a
+  `Link`. A read only operation is run with a POST too, a check that
+  writes nothing, taking the patch as its body. *Closed 2026-10-22:* a
+  committed create answering 201 (until then every submit answered
+  200).
+- **The envelope and the result as components.** `Contract` (the
+  envelope: `resource`, `operation`, `label`, `schema`, `values`,
+  `stale`, `outputs`, `notes`, `discarded`), `FullSchema` (the schema
+  itself), `NarrowRequest`, `Result` (the one result, `{path, code,
+  message}` entries in `ResultEntry`, each path a JSON Pointer),
+  `SubmitResult`, `Created` and `ProblemDetails` are shared. Until
+  contract 3 a refusal was a 200 `Result` with `ok: false` and a 403
+  Drupal's own error page; `fingerprint` was in `Contract` and the
+  refine's body was `RefineRequest`.
 - **The resource in every answer** (decided 2026-10-22). Each answer is
   `allOf` its shared envelope and an object typing that envelope's
   properties for the operation, so Swagger UI and Redoc show the
   resource under every endpoint, not only in `x-surface-schema`, which
-  stays. `values` (the contract, the refine, the validate and submit
+  stays. `values` (the envelope, the narrowing and a run's
   result) is `anyOf` the values component and any object: a contract
   shows a key that holds nothing as `null` (a create's required title
   before it is typed) and a refused run answers only what it accepted,
@@ -4567,30 +6028,159 @@ resource without reading these pages. Decided 2026-10-21.
   and Redocly reads the meta-schema as a malformed schema object (a
   `struct` error). The JSON Schema `examples` keyword, since OpenAPI 3.1
   deprecates the schema object's `example`. The `/schema` answer also
-  carries an OpenAPI example: the full schema document built for no
-  account, its schema and outputs as their components. Declared
+  carries an OpenAPI example: the full schema built for no account, the
+  values component (since contract 3 the answer is the schema itself,
+  `application/schema+json`). Declared
   outputs are a component of their own, `<values>.outputs`, which the
-  submit's `outputs` reference the same way.
+  run's `outputs` reference the same way.
 - **Permission as security.** The session cookie is an `apiKey` scheme,
   and basic auth an `http` one where `basic_auth` is on. Each operation
   requires one of them, or none when the anonymous role holds its
   permission, and names the permission as `x-drupal-permission`. The
   POSTs take `X-CSRF-Token`, required by core only with a session
   cookie.
-- **Examples from the declared defaults.** A submit's example is the
+- **Examples from the declared defaults.** A run's example is the
   defaults the operation is built with, the tool listing's source,
   accepted and validated by the pipeline with nothing stored, with no
   null, no empty map and no locked key; none when no default is declared
   or the pipeline refuses them (an update's required key with no default
   aside, which keeps what is stored).
-- **An operation with a subject is listed, not described.** Its
-  parameters arrive in the query string, but its schema depends on the
-  subject, so the top `x-surface.withASubject` names it with its
-  parameters. *Open:* such an operation as a path, its subject's
-  parameters stated and its schema the neutral build's.
+- **An operation with a subject is a path.** Its identity is the path's
+  parameters, `/surface-api/node.type/{type}`, and its schema the one
+  built knowing no subject, for no account, as its tool's listing is
+  (`OpenApiDocument::neutral()`). *Closed 2026-10-22:* until contract 3
+  such an operation was listed under the top `x-surface.withASubject`,
+  not described.
 
 (`OpenApiDocument`, `SchemaComponents`, `OpenApiController`,
 `OpenApiDocumentTest`, `SchemaComponentsTest`, `OpenApiEndpointTest`)
+
+### A schema can be read back into a structure
+
+Decided 2026-10-22. A JSON Schema document is read into a blueprint by
+`Contract\SchemaReader`: the emitter run backwards, each keyword read
+as the declaration the emitter writes it from
+([Reading a schema](reading-a-schema.md) has the mapping). Two ways in:
+`$inputs->fromSchema($document)` in a class, and variants a provider
+lists from the site, each with its schema. Each choice, and why:
+
+- **The emitter's own mapping, reversed.** A keyword is read as what
+  the emitter writes it from, not by a vocabulary of the reader's own,
+  so what the module states and what it reads are one table, and the
+  full schema of a shipped declaration, read back, is that document
+  again. `SchemaRoundTripTest` holds that for every declaration of the
+  examples, the first resource and the test fixtures with no runtime
+  refiner: 34 documents byte for byte, and each that differs listed
+  with its kind (a coded refiner read back as a declared rule, a rule on
+  a port of a structure emitted alone, access, an alter's mount, keys
+  from the site), the coded ones held to differing in their markers
+  alone. A coded refiner cannot be read back: what it computes is code,
+  and the document holds its answers, which are read as declared rules,
+  or its `refine` marker, which is not read.
+- **Kept, not refused, not dropped.** What the vocabulary cannot say
+  (`not`, `uniqueItems`, `patternProperties`, `dependentSchemas`, a type
+  that is several types, a conditional outside the vocabulary or one
+  that widens, a reference to another document) is the part of the
+  schema left over, kept as a `JsonSchema` constraint on the key it is
+  about, or on the frame for what is said of the object, and checked by
+  the pipeline against that part. Refused, a document with one such
+  keyword would be no structure at all, and most documents written
+  outside this module have one; dropped, the structure would accept what
+  its schema refuses. Kept, the pipeline holds a value to exactly what
+  the schema says, and both documents name it under `checkedOnServer`,
+  wider than the pipeline there and never stricter
+  ([Two documents](#two-documents-never-stricter-than-the-runtime)). The
+  entry carries the schema beside its keywords, so a reader of a
+  document reads the same constraint back. A frame keeps its own on its
+  definition map, checked after its keys, its refusal path the frame's,
+  code `not_valid`, and named under the frame's own `checkedOnServer`.
+  Both are additive to contract 2: no document of a declaration written
+  in code changes. Refused
+  outright is only what cannot be read at all, naming its pointer: no
+  object at the root or a def, a key holding a dot, a reference to a
+  def the document lacks, a type JSON Schema does not have.
+- **opis/json-schema at runtime.** A kept part is checked with
+  opis/json-schema (Apache-2.0), a runtime dependency of the module now,
+  where it was the suite's alone; the README names its license. It reads
+  2020-12, the dialect every document here is written in, and it is the
+  validator the suite already holds both documents to, so the server
+  reads a kept part as the suite reads the whole. Core's validator for
+  single-directory components, justinrainbow/json-schema, reads drafts 3
+  to 7. It runs as a standard client does: extensions off, so no default
+  is filled before `required` is read; `format` not asserted, as an
+  annotation ([`format` is an annotation](#format-is-an-annotation)).
+  A reference to another document is never fetched: no loader is
+  registered, and a value it would decide is refused, naming the
+  reference, code `unresolved`, rather than accepted unchecked.
+- **Open objects.** A structure is closed: the pipeline refuses a key
+  nobody declared before it reads anything else, and such a key would
+  have no type, no label, no widget and no config schema. So a frame
+  read from an object that leaves `additionalProperties` out, or `true`,
+  is read closed, noted at its pointer: narrower than its source for a
+  document that relied on extra keys, which the note says. An object at
+  a key with no properties (`{"type": "object"}`), a value whose keys
+  nobody declares, is a value of type `any` held whole to its schema by
+  a `JsonSchema` constraint: a map with no declared keys, stored as it
+  is sent. Refusing either was turned down: single-directory components
+  and most tools leave `additionalProperties` out, and a component
+  closes its props at the root itself.
+- **Older drafts converted first.** Single-directory components write
+  draft-04 and many tools draft-07; `SchemaReader::upconvert()` turns
+  each into 2020-12 (`definitions`, boolean exclusive bounds, `id`,
+  `nullable`, tuple `items`, `dependencies`) before anything is read,
+  so there is one reader, for the dialect the emitter writes, and each
+  conversion applies whatever `$schema` says, since it reads a spelling
+  2020-12 does not have.
+- **Variants from a provider.** `attachVariants($key, by:, from:
+  Provider::class)` names a service implementing
+  `VariantsFromSiteInterface`, whose `variants()` answers a `VariantList`:
+  per value of the deciding key, its label and the schema of the
+  structure it chooses. Asked at every build, as a keys provider is
+  ([Keys that come from the site](#keys-that-come-from-the-site)), and
+  refused when it cannot be cached or varies by the account, for the
+  same reasons. `KeysFromSiteInterface` was weighed and turned down: its
+  entry is a key, with a starting value and a lock, where a variant is a
+  structure chosen by a value, so the default and the lock would mean
+  nothing and the schema would have no place. Derived variants were
+  turned down too: a derived variant is plain definitions with no rules,
+  children or variants of its own, and a schema may say all three, so
+  each listed variant is a structure read from its schema, built by the
+  same build step as a class. A declared `#[Variant]` wins for a value
+  both name. *Added 2026-10-23:* an entry may name a structure class in
+  place of a schema (`VariantList::addStructure()`), built as declared,
+  for a value whose structure the site's code declares: a block plugin
+  naming its settings with `#[UsesStructure]`
+  ([A placed block is a resource](#a-placed-block-is-a-resource)). The contract does not change: `anyOf` of each variant's
+  def, one conditional per variant, the tool listing flattening them,
+  the React app narrowing locally, exactly as for a class's variants.
+- **Read structures are registered, not discovered.** Each object a
+  document holds as a structure (a def, an object a map cannot hold, a
+  variant) is registered by `ResourceRegistry::defineRead()` under
+  `schema:<id>:<hash>`, listed by no catalog, baseline or tool, and built
+  by name as any structure is. Its id is the def's key, `<owner>.<key>`
+  for an inline object and `<owner>.<key>.<value>` for a variant a
+  provider lists: the names the emitter gives a child with no class, so
+  a document read back writes the same defs.
+- **Rules at a site belong to the child.** A rule the container states
+  for a child it wires a port to (an `if` on the wired key, a `then`
+  reaching into the child) is moved into the child's def first, on the
+  port, once however many sites state it, so one def is one structure.
+- **Storage of variants from the site is open.** Which variants a site
+  has is not the code's, so no config schema written once can name
+  them: the generated schema types the key `ignore`, the variant the
+  deciding key chooses holds the value to its own keys before anything
+  is written, and the check that a resource advertises nothing its
+  config schema refuses reads `ignore` as refusing nothing.
+
+Open: a structure mixed in with its ports wired, whose wiring no
+document states; what a site narrows of a child (a lock its context
+made); a per-entry wiring of keys from the site; a `format` beyond
+`date`, `time` and `uuid` with a constraint of its own; a schema stored
+in configuration a site edits, as a provider of variants.
+(`Contract\SchemaReader`, `Resource\VariantsFromSiteInterface`,
+`Resource\VariantList`, `Plugin\Validation\Constraint\JsonSchemaConstraint`,
+`ResourceRegistry::defineRead()`, `DefinitionMap::frameConstraints()`,
+`SchemaReaderTest`, `SchemaRoundTripTest`, `VariantsFromSiteTest`)
 
 ## Evolution
 
@@ -4648,7 +6238,7 @@ resource](evolution.md#compatible-and-breaking). Each choice, and why:
   creates it and judges it as a create; each container's document
   judges the same key in its own kind. The lint reports per document,
   so one declaration can be a note on `configure` and breaking on
-  `add`. With a default, which a create gives and a value stored before
+  `create`. With a default, which a create gives and a value stored before
   reads, it asks nothing of any kind and stays a note. An optional key
   made required stays breaking for every kind: the nothing a stored
   value holds may be a `null` a client sent on purpose, which cleared
@@ -4773,3 +6363,78 @@ baselines for operations that need a subject, which the lint leaves out.
 `Contract\ContractDiff`, `Contract\ContractBaselines`,
 `Drush\Commands\ContractDiffCommand`, `ContractBaselineTest`,
 `ContractDiffTest`)
+
+## Testing
+
+### An adopter's tests hold the invariants
+
+Decided 2026-10-24. The invariants are what make the pattern safe to
+adopt: a schema a caller reads is never stricter than the pipeline,
+every door gives one answer, a static refiner and a static access
+answer are what their kind claims, and a resource changes in the open.
+This module held them for its own fixtures only, so a module adopting
+the pattern had the promise without the proof. `ResourceTestBase`, a
+kernel test base in `tests/src/Kernel/`, holds them for any module's
+resources, found the way core's test base classes are (every module's
+`tests/src` autoloaded under `Drupal\Tests\<module>\` when tests
+run). Each choice, and why:
+
+- **One base class, three things to write.** An adopter lists its
+  modules, its resource ids and, if it wants, rows of values; the
+  documents every check runs over are generated from the declaration
+  (the declared defaults, each key sent null, each key sent a value of
+  another type), so a resource is held the day it is written. Each check
+  is a test with one data set per resource, so a failure names the
+  check and the resource. The checks are this module's own, moved into
+  traits its tests use too (`NeverStricterTrait`,
+  `SchemaRoundTripTrait`, `StaticRefinerAgreementTrait`,
+  `StaticAccessAgreementTrait`, and since the same day the doors',
+  `DoorAgreementTrait`), so the two cannot drift.
+- **Skipped by kind, not failed.** A full schema that cannot read back
+  to itself for a known reason (a coded refiner, an access answer, an
+  alter's mount, keys from the site, a computed key, a constraint only
+  the server checks, a port, a runtime refiner) is how the pattern
+  works, not an adopter's mistake: it is reported skipped, naming the
+  kind and why. The kind is read from the document and the declaration
+  (`SchemaRoundTripTrait::kindOf()`), and `SchemaRoundTripTest` holds
+  it to the kind it lists by hand for each of the module's 51 such
+  documents, so the report an adopter reads is the one this module
+  checked. Any other difference fails.
+- **Exact unless the schema says otherwise.** A generated document the
+  pipeline refuses must be refused by both schemas, unless a refused
+  key carries a mark that the schema is wider there (`refine`, `live`,
+  `checkedOnServer`, a `format`, a secret's required, a stale value):
+  the marks are the contract's own statement of where it is not exact,
+  so the check reads them rather than a list an adopter would keep.
+- **The Tool API's own refusal is held to its shape.** Where the Tool
+  API refuses a value at its input, before the tool runs, it checks the
+  shape alone (types, the keys a create requires) while the pipeline
+  stops at the first value of another type, so the two may name other
+  keys: the check holds that both refuse and that the Tool API names
+  keys by pointer. The tool now reads the position the Tool API puts in
+  its message ("(property room) ...", until #3583065 moves it onto the
+  path) back off the message's arguments, and names a primitive type
+  refusal `type_mismatch`, as the pipeline does.
+- **Baselines are theirs.** The contract baseline check reads and
+  writes the directory the adopter names, `DATA_SURFACE_BASELINES_WRITE=1`
+  pinning today's, so a breaking change fails their build the way it
+  fails ours; nothing of this module's is compared.
+
+Open: an operation that needs a subject is built with none and left out
+of the checks that need values. Closed 2026-10-24: a resource whose keys
+are typed `uri` failed the door check when an array reached core's
+`PrimitiveTypeConstraintValidator` through the Tool API's input
+validation, which calls `parse_url()` on it (a `TypeError` the Tool API
+answered as a runtime failure, found by this base class over example
+14); the tool's shape check now refuses a map or a list sent for a
+scalar key first ([A refusal names what it depends
+on](#a-refusal-names-what-it-depends-on)), and
+`ExamplesSecretsInvariantsTest` holds example 14's mailer and webhook to
+every check.
+
+(`Tests\data_surface\Kernel\ResourceTestBase`,
+`FirstResourceInvariantsTest`, `ExamplesSecretsInvariantsTest`,
+`Traits\NeverStricterTrait`,
+`Traits\SchemaRoundTripTrait`, `SchemaRoundTripTest`,
+`ResourceOperationTool::execute()`, [Testing a
+resource](testing-a-resource.md))

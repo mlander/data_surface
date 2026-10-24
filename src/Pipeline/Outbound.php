@@ -17,8 +17,8 @@ use Drupal\data_surface\Refinement\DoesNotApply;
  *
  * One projection, the one the read tool has always applied, for every
  * document a door returns: the read tool's `values`, the write tool's
- * accepted `values` on a dry run and on a write, React's `/validate`
- * document. A key the build left out for the caller (an omitted child,
+ * accepted `values` on a dry run and on a write, the HTTP API's dry run
+ * and write. A key the build left out for the caller (an omitted child,
  * at any depth) is not there, since what is not in the built data
  * surface is nothing the caller may see; a secret is not there, at any
  * depth, under every variant that keeps it secret and inside
@@ -116,6 +116,13 @@ final class Outbound {
    *   where one below it is. Empty when nothing is.
    */
   public static function secrets(DataSurfaceInterface $surface): array {
+    // A sealed data surface never changes, and one child may be held at
+    // many keys (a read structure, built once): each is asked once.
+    static $asked = NULL;
+    $asked ??= new \WeakMap();
+    if (isset($asked[$surface])) {
+      return $asked[$surface];
+    }
     $secrets = [];
     foreach ($surface->getDefinitions()->entries() as $name => $entry) {
       $found = static::secretsAt($entry);
@@ -123,7 +130,7 @@ final class Outbound {
         $secrets[(string) $name] = $found;
       }
     }
-    return $secrets;
+    return $asked[$surface] = $secrets;
   }
 
   /**

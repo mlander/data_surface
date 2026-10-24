@@ -12,6 +12,13 @@ services:
   data_surface.options:
     class: Drupal\data_surface\Options\DataSurfaceOptions
     arguments: ['@plugin.manager.data_surface_options_resolver', '@validation.constraint', '@logger.channel.data_surface']
+  # What a key that refers to an entity is (`entity:<type>[:<bundle>]` and
+  # the bare `entity`), its candidates through core's selection handler,
+  # the limit up to which it lists them, and the lookup past it.
+  data_surface.references:
+    class: Drupal\data_surface\Reference\References
+    arguments: ['@entity_type.manager', '@entity_field.manager', '@plugin.manager.entity_reference_selection', '@config.factory', '@typed_data_manager']
+  Drupal\data_surface\Reference\References: '@data_surface.references'
   data_surface.secret_codec:
     class: Drupal\data_surface\Storage\SodiumSecretCodec
   Drupal\data_surface\Storage\SecretCodecInterface: '@data_surface.secret_codec'
@@ -67,7 +74,28 @@ services:
   # widget hints only when a renderer asks for them.
   data_surface.contract_emitter:
     class: Drupal\data_surface\Contract\ContractEmitter
-    arguments: ['@data_surface.options', '@string_translation', '@validation.constraint']
+    arguments: ['@data_surface.options', '@string_translation', '@validation.constraint', '@data_surface.site_list_budget']
+  # How many entries of a list the site decides (variants from the site,
+  # keys from the site) the documents and the tool listing spell out.
+  data_surface.site_list_budget:
+    class: Drupal\data_surface\Contract\SiteListBudget
+    arguments: ['@config.factory']
+  Drupal\data_surface\Contract\SiteListBudget: '@data_surface.site_list_budget'
+  # The emitter run backwards: a JSON Schema document read into the keys,
+  # children and rules of a structure, what it cannot say kept as a
+  # JsonSchema constraint. A blueprint's fromSchema() reads with it; a
+  # caller with a document of its own registers it here to build it.
+  data_surface.schema_reader:
+    class: Drupal\data_surface\Contract\SchemaReader
+    arguments: ['@data_surface.resource_registry', '@typed_data_manager']
+  Drupal\data_surface\Contract\SchemaReader: '@data_surface.schema_reader'
+  # Writes a config schema type as JSON Schema, for the schema reader: a
+  # plugin's settings (data_surface_block), a config object a resource is
+  # first written from (drush generate surface:resource).
+  data_surface.config_schema_document:
+    class: Drupal\data_surface\Contract\ConfigSchemaDocument
+    arguments: ['@config.typed']
+  Drupal\data_surface\Contract\ConfigSchemaDocument: '@data_surface.config_schema_document'
   # The additive-diff lint: each module's committed contract baselines,
   # and today's full schemas judged against them.
   data_surface.contract_baselines:
@@ -77,7 +105,7 @@ services:
   # config object, written from the resource (drush data_surface:config-schema).
   data_surface.config_schema:
     class: Drupal\data_surface\Storage\ConfigSchemaGenerator
-    arguments: ['@data_surface.resource_registry', '@data_surface.resources', '@extension.list.module', '%app.root%', '%container.modules%', '@service_container', '@class_resolver', '@data_surface.resource_plugins']
+    arguments: ['@data_surface.resource_registry', '@data_surface.resources', '@extension.list.module', '%app.root%', '%container.modules%', '@service_container', '@class_resolver', '@data_surface.resource_plugins', '@entity_type.manager']
   # Creates the config objects a module's config/install ships that the
   # site does not have, for a post-update hook (data_surface_install_missing_config()).
   data_surface.missing_config_installer:
@@ -88,6 +116,26 @@ services:
   data_surface.resource_catalog:
     class: Drupal\data_surface\ResourceBuild\ResourceCatalog
     arguments: ['@data_surface.resource_registry', '@data_surface.resource_plugins', '@data_surface.derived_variants']
+  # The live map of the site (drush surface:catalog): the static layer,
+  # the doors each operation reaches as the modules tagged
+  # data_surface.catalog_doors name them, and every build refusal.
+  data_surface.site_catalog:
+    class: Drupal\data_surface\ResourceBuild\SiteCatalog
+    arguments:
+      - '@data_surface.resource_catalog'
+      - '@data_surface.resource_registry'
+      - '@data_surface.resources'
+      - '@data_surface.resource_plugins'
+      - '@account_switcher'
+      - !tagged_iterator data_surface.catalog_doors
+      - '%app.root%'
+      - '@data_surface.site_list_budget'
+  # The form routes a module declares for an operation.
+  data_surface.form_route_doors:
+    class: Drupal\data_surface\ResourceBuild\FormRouteDoors
+    arguments: ['@router.route_provider']
+    tags:
+      - { name: data_surface.catalog_doors, priority: 40 }
   # Which plugins name which structure with #[UsesStructure], read from the
   # definitions of every host that reads the attribute (the keys of
   # ResourcePluginHooks::HOSTS).

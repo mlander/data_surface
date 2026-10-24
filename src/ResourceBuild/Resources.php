@@ -23,6 +23,7 @@ use Drupal\data_surface\DataSurfaceBuilderInterface;
 use Drupal\data_surface\DataSurfaceInterface;
 use Drupal\data_surface\DefinitionMetadata;
 use Drupal\data_surface\Pipeline\DataSurfaceStorageInterface;
+use Drupal\data_surface\Reference\References;
 use Drupal\data_surface\Refinement\ChoiceSet;
 use Drupal\data_surface\Refinement\Condition;
 use Drupal\data_surface\Refinement\DeclaredRefiner;
@@ -30,13 +31,18 @@ use Drupal\data_surface\Refinement\DoesNotApply;
 use Drupal\data_surface\Refinement\Narrowing;
 use Drupal\data_surface\Refinement\Rule;
 use Drupal\data_surface\Refinement\RuntimeRefiner;
-use Drupal\data_surface\Refinement\StaticRefinerContainer;
+use Drupal\data_surface\Pipeline\PipelineGuard;
 use Drupal\data_surface\Refinement\WatchedValueCheckInterface;
 use Drupal\data_surface\Resource\AltersOutputsInterface;
 use Drupal\data_surface\Resource\DefinesOutputsInterface;
 use Drupal\data_surface\Resource\AltersStorageLayoutInterface;
 use Drupal\data_surface\Resource\KeyedList;
 use Drupal\data_surface\Resource\KeysFromSiteInterface;
+use Drupal\data_surface\Resource\VariantList;
+use Drupal\data_surface\Resource\VariantsFromSiteInterface;
+use Drupal\data_surface\Resource\ClosedVariantsInterface;
+use Drupal\data_surface\Contract\SchemaReader;
+use Drupal\data_surface\Contract\SchemaResolver;
 use Drupal\data_surface\Resource\KnowsClearableKeysInterface;
 use Drupal\data_surface\Resource\AccessAnswer;
 use Drupal\data_surface\Resource\Attribute\Variant;
@@ -196,7 +202,7 @@ final class Resources implements ResourcesInterface {
    * The static access answers asked lately, by class, context and account kind.
    *
    * Keyed by what the context knows, since an answer may read its
-   * identity, and so bounded: an edit context per entity would otherwise
+   * identity, and so bounded: an update context per entity would otherwise
    * add one entry per entity for the life of a worker. The most recently
    * asked last.
    *
@@ -223,6 +229,32 @@ final class Resources implements ResourcesInterface {
    * @var array<string, array{surface: \Drupal\data_surface\DataSurfaceInterface, tags: string[]}>
    */
   protected array $builds = [];
+
+  /**
+   * How many read structures are kept, the least recently built let go.
+   */
+  protected const READ_KEPT = 4096;
+
+  /**
+   * The structures read from a schema built lately, by how they were asked.
+   *
+   * A read structure is its schema and nothing more: no class, alter,
+   * storage, access class or provider of its own, and its name holds the
+   * hash of the document it was read from. So one built in a context is
+   * the same wherever it is attached, and a def a document uses at many
+   * sites (a component's props in every slot that offers it) is built
+   * once and held at each.
+   *
+   * @var array<string, array{surface: \Drupal\data_surface\DataSurfaceInterface, tags: string[]}>
+   */
+  protected array $readBuilds = [];
+
+  /**
+   * The ports and keys of each read structure, once read, by name.
+   *
+   * @var array<string, array{0: array<string, \Drupal\data_surface\Port>, 1: string[]}>
+   */
+  protected array $readPorts = [];
 
   /**
    * How many builds were made and how many were answered from the memo.
@@ -393,7 +425,8 @@ final class Resources implements ResourcesInterface {
    * Names what a sealed build is kept by within the request.
    *
    * The resource's name, everything the context says, the kind of build,
-   * whether it is held to its config schema, and the account kind: none
+   * whether it is held to its config schema, the limit up to which a
+   * reference key lists its candidates, and the account kind: none
    * for a build for no account, the roles and permissions for one for the
    * account alone, and the account itself beside them for a build with
    * every answer applied, which a runtime answer may read.
@@ -423,7 +456,18 @@ final class Resources implements ResourcesInterface {
         sort($roles);
         $kind = [$roles, $this->permissionsHashGenerator->generate($account), $alone ? NULL : (string) $account->id()];
       }
-      return hash('xxh3', serialize([$name, $context, $alone, $declaring, $this->holdsToSchema, $kind]));
+      // Whether a reference key lists its candidates is the limit's.
+      // Decision: see
+      // docs/decisions.md#a-reference-is-an-id-with-a-list-the-site-decides-listed-or-looked-up.
+      return hash('xxh3', serialize([
+        $name,
+        $context,
+        $alone,
+        $declaring,
+        $this->holdsToSchema,
+        $kind,
+        $this->references()->limit(),
+      ]));
     }
     catch (\Throwable) {
       return NULL;
@@ -473,6 +517,11 @@ final class Resources implements ResourcesInterface {
         unset($this->builds[$key]);
       }
     }
+    foreach ($this->readBuilds as $key => $kept) {
+      if (array_intersect($tags, $kept['tags']) !== []) {
+        unset($this->readBuilds[$key]);
+      }
+    }
   }
 
   /**
@@ -485,6 +534,8 @@ final class Resources implements ResourcesInterface {
    */
   public function forgetBuilds(): void {
     $this->builds = [];
+    $this->readBuilds = [];
+    $this->readPorts = [];
     $this->childrenDeclared = [];
     $this->refusing = [];
   }
@@ -532,7 +583,9 @@ final class Resources implements ResourcesInterface {
     }
     $definition = $this->registry->getDefinition($resource);
     $memo = $definition->name() . ' ' . $context->id;
-    if ($definition->storage === NULL || isset($this->heldToSchema[$memo])) {
+    // An operation's own values are not what the config schema describes:
+    // they are a query or a list over the things, which storage reads.
+    if ($definition->storage === NULL || isset($this->heldToSchema[$memo]) || $this->shapeOf($definition, $context) !== $definition) {
       return;
     }
     $storage = $this->instance($definition->storage, ResourceStorageInterface::class);
@@ -553,6 +606,46 @@ final class Resources implements ResourcesInterface {
       }
     }
     $this->heldToSchema[$memo] = TRUE;
+  }
+
+  /**
+   * Gives what declares an operation's keys: the resource, or a structure.
+   *
+   * An operation that names `values:` takes the keys of that structure in
+   * place of the resource's: a listing's paging and filter, a reorder's
+   * list. The structure has no identity and no storage of its own; the
+   * resource's storage stores what it takes.
+   *
+   * Decision: see
+   * docs/decisions.md#a-listing-is-a-read-only-operation-with-outputs-a-reorder-is-an-update-over-the-collection.
+   *
+   * @param \Drupal\data_surface\ResourceBuild\ResourceDefinition $definition
+   *   The resource.
+   * @param \Drupal\data_surface\Resource\OperationContext $context
+   *   The operation it is asked for in.
+   *
+   * @return \Drupal\data_surface\ResourceBuild\ResourceDefinition
+   *   The structure the operation names, or the resource itself.
+   *
+   * @throws \LogicException
+   *   When the operation names a class that is no structure, or one with
+   *   identity or storage.
+   */
+  public function shapeOf(ResourceDefinition $definition, OperationContext $context): ResourceDefinition {
+    $values = $this->registry->getOperations($definition->name())[$context->id]->values ?? NULL;
+    if ($values === NULL) {
+      return $definition;
+    }
+    $shape = $this->registry->hasDefinition($values) ? $this->registry->getDefinition($values) : NULL;
+    if ($shape === NULL || $shape->isResource() || $shape->identity !== [] || $shape->storage !== NULL) {
+      throw new \LogicException(sprintf(
+        'The "%s" operation of %s takes the values of %s, which is no structure: an operation\'s own values are a #[Structure] class, with no identity and no storage, which the resource\'s storage stores.',
+        $context->id,
+        $definition->id,
+        $values,
+      ));
+    }
+    return $shape;
   }
 
   /**
@@ -581,6 +674,15 @@ final class Resources implements ResourcesInterface {
     $definition = $this->registry->getDefinition($resource);
     // Refuses two providers of one operation id, whichever is asked for.
     $this->registry->getOperations($definition->name());
+    // The resource the operation is asked of: its permission, its storage,
+    // its access and how its operation behaves stay its own when the
+    // operation takes the keys of a structure in place of the resource's.
+    // Decision: see
+    // docs/decisions.md#a-listing-is-a-read-only-operation-with-outputs-a-reorder-is-an-update-over-the-collection.
+    $own = $definition;
+    if ($top) {
+      $definition = $this->shapeOf($definition, $context);
+    }
 
     $builder = (new DataSurfaceBuilder())->setWatchedValueCheck($this->watchedValueCheck);
     $inputs = $this->blueprint($builder, $definition);
@@ -600,12 +702,14 @@ final class Resources implements ResourcesInterface {
       if (!$alter->appliesIn($context->id)) {
         continue;
       }
-      $instance = $this->classResolver->getInstanceFromDefinition($alter->class);
+      $instance = $this->alter($alter->class);
       if ($instance instanceof AltersInputsInterface) {
-        $instance->alterInputs($additions[$alter->module][0] ??= (new ResourceBlueprintAdditions($builder, $this->typedDataManager, $alter->module))->useShapes($this->shapes()));
+        $blueprint = $additions[$alter->module][0] ??= (new ResourceBlueprintAdditions($builder, $this->typedDataManager, $alter->module))->useShapes($this->shapes())->useReferences($this->references());
+        PipelineGuard::onBehalf(PipelineGuard::ALTER, $alter->class, 'alterInputs', static fn () => $instance->alterInputs($blueprint));
       }
       if ($instance instanceof AltersOutputsInterface) {
-        $instance->alterOutputs($additions[$alter->module][1] ??= (new ResourceBlueprintAdditions($builder, $this->typedDataManager, $alter->module, TRUE))->useShapes($this->shapes()));
+        $blueprint = $additions[$alter->module][1] ??= (new ResourceBlueprintAdditions($builder, $this->typedDataManager, $alter->module, TRUE))->useShapes($this->shapes())->useReferences($this->references());
+        PipelineGuard::onBehalf(PipelineGuard::ALTER, $alter->class, 'alterOutputs', static fn () => $instance->alterOutputs($blueprint));
       }
       if ($instance instanceof AltersStorageLayoutInterface) {
         $builder->setThirdPartyLayout($alter->module, $instance->storageLayout());
@@ -647,18 +751,19 @@ final class Resources implements ResourcesInterface {
         ));
       }
     }
-    $variantKeys = $this->variantKeysOf($definition, $inputs, $input_keys);
+    $variantKeys = $this->variantKeysOf($definition, $inputs, $input_keys, $builder);
 
     $this->applyContext($builder, $definition, $context, $input_keys, $attached, $lists);
     $ports = $inputs->ports();
     $frame = ['class' => $definition->name(), 'id' => $definition->id, 'key' => '', 'inputs' => $input_keys];
-    $permission = $this->registry->getOperations($definition->name())[$context->id]->permission ?? NULL;
+    $permission = $this->registry->getOperations($own->name())[$context->id]->permission ?? NULL;
     $frame['permission'] = $permission === NULL ? NULL : static::resolvePermission($permission, $context);
     // Which keys the storage always holds, asked of the storage that
     // stores them: this resource's own, or its parent's, under the key
     // the parent stores it at.
     // Decision: see docs/decisions.md#a-key-its-storage-always-holds.
-    $frame['held'] = $this->heldBy($definition, $context, $ancestry);
+    // An operation's own values are no keys the storage holds.
+    $frame['held'] = $definition === $own ? $this->heldBy($definition, $context, $ancestry) : NULL;
     $this->markAlwaysHeld($builder, $input_keys, $frame['held']);
     // Each structure mixed in, built by itself for its def and its access,
     // which locks its members or takes them back out; then nothing of the
@@ -808,13 +913,15 @@ final class Resources implements ResourcesInterface {
       if ($deriver !== NULL) {
         // A withheld variant is still declared: nothing derives in its
         // place.
-        foreach ($deriver->variants([...array_keys($variants), ...$withheld]) as $value => $definitions) {
+        $named = [...array_keys($variants), ...$withheld];
+        assert(PipelineGuard::holdsNothingDoorSpecific($deriver, PipelineGuard::DERIVED));
+        foreach (PipelineGuard::onBehalf(PipelineGuard::DERIVED, get_class($deriver), 'variants', static fn (): array => $deriver->variants($named)) as $value => $definitions) {
           $variants[(string) $value] ??= new Attachment((new DataSurfaceBuilder($definitions))->setWatchedValueCheck($this->watchedValueCheck)->seal());
         }
       }
       $declared = [...array_map('strval', array_keys($variants)), ...$withheld];
       static::assertListNarrowsVariants($builder, $definition, $key, $by, $declared);
-      $builder->attachVariants($key, $by, $variants, static::variantLabels($children));
+      $builder->attachVariants($key, $by, $variants, $variantKeys[$key]['labels'] + static::variantLabels($children));
       if ($runtime_variant) {
         $builder->markRuntimeAccess($key);
       }
@@ -847,11 +954,11 @@ final class Resources implements ResourcesInterface {
     // Decision: see docs/decisions.md#a-resource-evolves-in-the-open.
     $builder->setVersion($definition->version);
     // Decision: see docs/decisions.md#an-operation-states-how-it-behaves.
-    if ($top && ($this->registry->getOperations($definition->name())[$context->id]->readOnly ?? FALSE)) {
+    if ($top && ($this->registry->getOperations($own->name())[$context->id]->readOnly ?? FALSE)) {
       $builder->markChangesNothing();
     }
     // Decision: see docs/decisions.md#locked-at-the-top.
-    $locked ??= $top ? $this->lockedAtTheTop($builder, $definition, $context) : NULL;
+    $locked ??= $top ? $this->lockedAtTheTop($builder, $own, $context) : NULL;
     if ($locked !== NULL) {
       $builder->lockWhole($locked);
     }
@@ -1033,9 +1140,12 @@ final class Resources implements ResourcesInterface {
     if ($storedAt !== NULL) {
       $frame['storedAt'] = $storedAt;
     }
+    $locked = $whole && $access?->isLocked() ? static::lockReason($access) : NULL;
     return [
       new Attachment(
-        $this->buildResource($definition->name(), $child_context, [...$ancestry, $frame], $whole && $access?->isLocked() ? static::lockReason($access) : NULL),
+        $definition->isRead() && $access === NULL && $locked === NULL
+          ? $this->buildRead($definition->name(), $child_context, [...$ancestry, $frame])
+          : $this->buildResource($definition->name(), $child_context, [...$ancestry, $frame], $locked),
         $definition->name(),
         $definition->id,
       ),
@@ -1043,6 +1153,46 @@ final class Resources implements ResourcesInterface {
       $child_context,
       $runtime,
     ];
+  }
+
+  /**
+   * Builds a structure read from a schema once for every site it is at.
+   *
+   * Kept for the rest of the request by its name, its context and the
+   * kind of build, as a top build is (memo()), when it reads no port of a
+   * container, which each site would bind its own way, and may be kept.
+   *
+   * @param string $name
+   *   The read structure's name.
+   * @param \Drupal\data_surface\Resource\OperationContext $context
+   *   The context it is invoked in.
+   * @param array $ancestry
+   *   Where it is first attached, for messages and the cycle check.
+   *
+   * @return \Drupal\data_surface\DataSurfaceInterface
+   *   The sealed structure.
+   */
+  protected function buildRead(string $name, OperationContext $context, array $ancestry): DataSurfaceInterface {
+    $key = hash('xxh3', serialize([
+      $name,
+      $context,
+      $this->accountAlone,
+      $this->declaring,
+      $this->holdsToSchema,
+      $this->references()->limit(),
+    ]));
+    if (isset($this->readBuilds[$key])) {
+      $this->buildCounts['reused']++;
+      return $this->readBuilds[$key]['surface'];
+    }
+    $built = $this->buildResource($name, $context, $ancestry);
+    if ($built->getPortValues() === [] && static::keepable($built)) {
+      $this->readBuilds[$key] = ['surface' => $built, 'tags' => $built->getCacheTags()];
+      if (count($this->readBuilds) > self::READ_KEPT) {
+        unset($this->readBuilds[array_key_first($this->readBuilds)]);
+      }
+    }
+    return $built;
   }
 
   /**
@@ -1101,7 +1251,7 @@ final class Resources implements ResourcesInterface {
     // schema is written from.
     $shell = $builder->getDefinition($key);
     if ($shell !== NULL) {
-      DefinitionMetadata::setEach($shell, $each['child'] ? $each['each'] : (new ResourceBlueprint(new DataSurfaceBuilder(), $this->typedDataManager))->useShapes($this->shapes())->add($key, $each['each'], $shell->getLabel() ?? $key, $each['default']));
+      DefinitionMetadata::setEach($shell, $each['child'] ? $each['each'] : (new ResourceBlueprint(new DataSurfaceBuilder(), $this->typedDataManager))->useShapes($this->shapes())->useReferences($this->references())->add($key, $each['each'], $shell->getLabel() ?? $key, $each['default']));
     }
     $entries = $keys->entries();
     $map = (new DataSurfaceBuilder())->setWatchedValueCheck($this->watchedValueCheck);
@@ -1156,7 +1306,7 @@ final class Resources implements ResourcesInterface {
       }
     }
     else {
-      $blueprint = (new ResourceBlueprint($map, $this->typedDataManager))->useShapes($this->shapes());
+      $blueprint = (new ResourceBlueprint($map, $this->typedDataManager))->useShapes($this->shapes())->useReferences($this->references());
       foreach ($entries as $id => $entry) {
         $blueprint->add((string) $id, $each['each'], $entry['label'], $entry['default'] ?? $each['default']);
         if ($entry['locked']) {
@@ -1165,7 +1315,9 @@ final class Resources implements ResourcesInterface {
       }
       // Decision: see docs/decisions.md#a-key-its-storage-always-holds.
       $held = $frame['held'] ?? NULL;
-      $this->markAlwaysHeld($map, array_map('strval', array_keys($entries)), is_array($held) ? ['prefix' => $held['prefix'] . $key . '.'] + $held : NULL);
+      $this->markAlwaysHeld($map, array_map('strval', array_keys($entries)), is_array($held) ? [
+        'prefix' => $held['prefix'] . $key . '.',
+      ] + $held : NULL);
     }
     $sealed = $map->seal();
     $reads = [];
@@ -1276,7 +1428,8 @@ final class Resources implements ResourcesInterface {
    *   When the list cannot be cached, or varies by the account.
    */
   protected function keysFrom(ResourceDefinition $definition, string $key, string $from): KeyedList {
-    $keys = $this->instance($from, KeysFromSiteInterface::class)->keys();
+    $provider = $this->instance($from, KeysFromSiteInterface::class);
+    $keys = PipelineGuard::onBehalf(PipelineGuard::PROVIDER, $from, 'keys', static fn (): KeyedList => $provider->keys());
     if ($keys->getCacheMaxAge() === 0) {
       throw new \LogicException(sprintf('%s lists the keys of "%s" on %s with max-age 0. Keys from the site must be cacheable, since the form, both schema documents and the tool listing are kept with them: declare the cache tags of what it reads (a configuration object\'s, an entity type\'s list) instead.', $from, $key, $definition->id));
     }
@@ -1617,20 +1770,20 @@ final class Resources implements ResourcesInterface {
         $ruling[] = $refiner->key;
       }
     }
-    $this->bindRefiners($builder, $structure, static::resourceClass($structure), $structure->refiners, $keys, [], ports: $ports, translated: $reads);
+    $this->bindRefiners($builder, $structure, $structure->isDerived() ? $structure->name() : static::resourceClass($structure), $structure->refiners, $keys, [], ports: $ports, translated: $reads);
     $this->bindRules($builder, $structure, $mixin['blueprint']->rules(), NULL, $keys, [], [], [], [], [], $ruling, $ports, translated: $reads);
     foreach ($structure->alters as $alter) {
       if (!$alter->appliesIn($context->id)) {
         continue;
       }
-      $instance = $this->classResolver->getInstanceFromDefinition($alter->class);
+      $instance = $this->alter($alter->class);
       $within = [$structure->id, $definition->id, $keys];
-      $additions = (new ResourceBlueprintAdditions($builder, $this->typedDataManager, $alter->module, FALSE, $within))->useShapes($this->shapes());
+      $additions = (new ResourceBlueprintAdditions($builder, $this->typedDataManager, $alter->module, FALSE, $within))->useShapes($this->shapes())->useReferences($this->references());
       if ($instance instanceof AltersInputsInterface) {
         $instance->alterInputs($additions);
       }
       if ($instance instanceof AltersOutputsInterface) {
-        $instance->alterOutputs((new ResourceBlueprintAdditions($builder, $this->typedDataManager, $alter->module, TRUE, $within))->useShapes($this->shapes()));
+        $instance->alterOutputs((new ResourceBlueprintAdditions($builder, $this->typedDataManager, $alter->module, TRUE, $within))->useShapes($this->shapes())->useReferences($this->references()));
       }
       $this->bindRefiners($builder, $structure, $instance, $alter->refiners, $keys, [], [], NULL, $alter->module, $additions->extended(), ports: $ports, translated: $reads);
       $this->bindRules($builder, $structure, $additions->rules(), $alter->module, $keys, [], [], $additions->extended(), [], [], $ruling, $ports, translated: $reads);
@@ -1877,9 +2030,17 @@ final class Resources implements ResourcesInterface {
    */
   protected function portsOf(string $child): array {
     $definition = $this->registry->getDefinition($child);
+    // A read structure's name holds the hash of what it was read from.
+    if ($definition->isRead() && isset($this->readPorts[$definition->name()])) {
+      return $this->readPorts[$definition->name()];
+    }
     $blueprint = $this->blueprint(new DataSurfaceBuilder(), $definition);
     $this->fillBlueprints($definition, $blueprint);
-    return [$blueprint->ports(), $blueprint->declared()];
+    $ports = [$blueprint->ports(), $blueprint->declared()];
+    if ($definition->isRead()) {
+      $this->readPorts[$definition->name()] = $ports;
+    }
+    return $ports;
   }
 
   /**
@@ -2256,7 +2417,7 @@ final class Resources implements ResourcesInterface {
    * A static answer depends on nothing but the account, so it is asked
    * once for a context and an account kind (the account's roles and its
    * permissions) and kept. With assertions on, it is asked a second time
-   * with the global container guarded (StaticRefinerContainer::guardAccess())
+   * with the global container guarded (PipelineGuard::guardAccess())
    * and must answer the same, static again, having asked for no service
    * that reads site state: an answer whose cacheability left out what it
    * read is refused, naming the class.
@@ -2290,7 +2451,7 @@ final class Resources implements ResourcesInterface {
     }
     $instance = $this->instance($class, $interface);
     assert($instance instanceof OperationAccessInterface || $instance instanceof AltersAccessInterface);
-    $answer = AccessAnswer::fromAnswer($instance->access($context, $account));
+    $answer = AccessAnswer::fromAnswer(PipelineGuard::onBehalf($instance instanceof OperationAccessInterface ? PipelineGuard::ACCESS : PipelineGuard::ALTER, $class, 'access', static fn (): AccessResultInterface|AccessAnswer => $instance->access($context, $account)));
     if (!$answer->isStatic()) {
       return $answer;
     }
@@ -2357,7 +2518,7 @@ final class Resources implements ResourcesInterface {
    *   When it answers otherwise, or asks for a service reading site state.
    */
   protected function answersAgain(string $class, OperationAccessInterface|AltersAccessInterface $instance, OperationContext $context, AccountInterface $account, AccessAnswer $first): bool {
-    $again = AccessAnswer::fromAnswer(StaticRefinerContainer::guardAccess($class, static fn (): AccessResultInterface|AccessAnswer => $instance->access($context, $account)));
+    $again = AccessAnswer::fromAnswer(PipelineGuard::guardAccess($class, static fn (): AccessResultInterface|AccessAnswer => $instance->access($context, $account)));
     if ($again->getAnswer() !== $first->getAnswer() || !$again->isStatic()) {
       throw new \LogicException(sprintf(
         'The %s %s answered %s, static by its cacheability, and asked again for the same account in the same context answered %s, %s. A static answer depends on the account alone and is the same every time it is asked; one that depends on anything else says so in its cacheability.',
@@ -2407,15 +2568,21 @@ final class Resources implements ResourcesInterface {
    *   The owner's input blueprint.
    * @param string[] $input_keys
    *   The owner's plain input keys.
+   * @param \Drupal\data_surface\DataSurfaceBuilderInterface $builder
+   *   The owner's builder, which what a provider of variants read reaches.
    *
-   * @return array<string, array{by: string, children: array<string, class-string>}>
+   * @return array<string, array{by: string, children: array<string, string>, labels: array<string, string|\Stringable>}>
    *   The variants at each key, filled from discovery's #[Variant]
-   *   classes.
+   *   classes, then from what a schema read into the blueprint states and
+   *   what a provider of variants from the site lists, each of those a
+   *   read structure by name, with the label each of those gives its
+   *   value.
    *
    * @throws \LogicException
-   *   When a deciding key is not a plain input of the owner.
+   *   When a deciding key is not a plain input of the owner, or a provider
+   *   of variants answers what cannot be kept.
    */
-  protected function variantKeysOf(ResourceDefinition $definition, ResourceBlueprint $inputs, array $input_keys): array {
+  protected function variantKeysOf(ResourceDefinition $definition, ResourceBlueprint $inputs, array $input_keys, DataSurfaceBuilderInterface $builder): array {
     $variantKeys = [];
     foreach ($inputs->variants() as $key => $by) {
       if (!in_array($by, $input_keys, TRUE)) {
@@ -2429,12 +2596,93 @@ final class Resources implements ResourcesInterface {
       // Every structure whose #[Variant] names this class and key is
       // one of the variants; the parent names none.
       // Decision: see docs/decisions.md#variants-nothing-declares.
+      $children = $this->registry->getVariants($definition->name(), $key);
+      $labels = [];
+      // A variant a schema read into the blueprint states, or one a
+      // provider lists from the site: a structure read from its schema,
+      // beside the declared ones, which win for a value both name.
+      // Decision: see
+      // docs/decisions.md#a-schema-can-be-read-back-into-a-structure.
+      foreach ($inputs->readVariants()[$key] ?? [] as $value => ['name' => $name, 'label' => $label]) {
+        $children[(string) $value] ??= $name;
+        if ($label !== NULL) {
+          $labels[(string) $value] = $label;
+        }
+      }
+      $from = $inputs->variantsFrom()[$key] ?? NULL;
+      if ($from !== NULL) {
+        $list = $this->variantsFrom($definition, (string) $key, $from);
+        $builder->addCacheableDependency($list);
+        // The defs the entries share, read once for all of them.
+        $shared = $list->defs() === [] ? NULL : SchemaReader::prepared(['$defs' => $list->defs()]);
+        $shared_hash = $shared === NULL ? NULL : ResourceBlueprint::documentHash($shared);
+        foreach ($list->entries() as $value => $entry) {
+          $value = (string) $value;
+          if (isset($children[$value])) {
+            continue;
+          }
+          // A structure the site's code declares is built as declared; any
+          // other is read from its schema.
+          $id = $definition->id . '.' . $key . '.' . $value;
+          $reference = is_string($entry['schema']['$ref'] ?? NULL) && count($entry['schema']) === 1 ? SchemaResolver::defName($entry['schema']['$ref']) : NULL;
+          $shared_def = $shared !== NULL && $reference !== NULL && isset($shared['$defs'][$reference]);
+          $pointer = '/$defs/' . str_replace(['~', '/'], ['~0', '~1'], (string) $reference);
+          $children[$value] = match (TRUE) {
+            isset($entry['structure']) => $this->registry->getDefinition($entry['structure'])->name(),
+            $shared_def => $inputs->readStructure($id, $shared, $pointer, $shared_hash),
+            default => $inputs->readStructure($id, SchemaReader::prepared($entry['schema'] + ($list->defs() === [] ? [] : ['$defs' => $list->defs()])), ''),
+          };
+          $labels[$value] = $entry['label'];
+        }
+      }
       $variantKeys[$key] = [
         'by' => $by,
-        'children' => $this->registry->getVariants($definition->name(), $key),
+        'children' => $children,
+        'labels' => $labels,
       ];
     }
     return $variantKeys;
+  }
+
+  /**
+   * Asks a provider for its variants, refusing a list that cannot be kept.
+   *
+   * Decision: see docs/decisions.md#a-schema-can-be-read-back-into-a-structure.
+   *
+   * @param \Drupal\data_surface\ResourceBuild\ResourceDefinition $definition
+   *   The owner, for the messages.
+   * @param string $key
+   *   The key the variants sit at, for the messages.
+   * @param class-string<\Drupal\data_surface\Resource\VariantsFromSiteInterface> $from
+   *   The provider's class.
+   *
+   * @return \Drupal\data_surface\Resource\VariantList
+   *   What it listed.
+   *
+   * @throws \LogicException
+   *   When the list cannot be cached, or varies by the account.
+   */
+  protected function variantsFrom(ResourceDefinition $definition, string $key, string $from): VariantList {
+    $provider = $this->instance($from, VariantsFromSiteInterface::class);
+    $list = PipelineGuard::onBehalf(PipelineGuard::PROVIDER, $from, 'variants', static fn (): VariantList => $provider->variants());
+    if ($list->getCacheMaxAge() === 0) {
+      throw new \LogicException(sprintf('%s lists the variants at "%s" on %s with max-age 0. Variants from the site must be cacheable, since the form, both schema documents and the tool listing are kept with them: declare the cache tags of what it reads instead.', $from, $key, $definition->id));
+    }
+    $accounts = array_filter($list->getCacheContexts(), static fn (string $context): bool => $context === 'user' || str_starts_with($context, 'user.') || $context === 'session' || str_starts_with($context, 'session.'));
+    if ($accounts !== []) {
+      throw new \LogicException(sprintf('%s lists the variants at "%s" on %s varying by %s. Which variants there are is the site\'s, the same for every account; one an account may not choose is access, which the variant\'s access class answers.', $from, $key, $definition->id, implode(', ', $accounts)));
+    }
+    if (is_subclass_of($from, ClosedVariantsInterface::class)) {
+      // Decision: see
+      // docs/decisions.md#an-extension-is-a-variant-the-site-adds-or-an-alter.
+      $closed = $from::structures();
+      foreach ($list->entries() as $value => $entry) {
+        if (($entry['structure'] ?? NULL) !== ($closed[(string) $value] ?? NULL)) {
+          throw new \LogicException(sprintf('%s lists "%s" for the variants at "%s" on %s, which its structures() does not name with that structure. A closed provider lists only the structures it names, each by its class (VariantList::addStructure()).', $from, $value, $key, $definition->id));
+        }
+      }
+    }
+    return $list;
   }
 
   /**
@@ -2634,7 +2882,7 @@ final class Resources implements ResourcesInterface {
       }
     }
     if ($definition->access !== NULL) {
-      $answer = static::atTheTop($this->instance($definition->access, OperationAccessInterface::class)->access($context, $account));
+      $answer = static::atTheTop($this->answerAccess($definition->access, $context, $account));
       $result = $permission === NULL ? $answer : $result->andIf($answer);
     }
     // Then each alter that answers access, which may refuse and never
@@ -2788,9 +3036,9 @@ final class Resources implements ResourcesInterface {
     try {
       $this->fillBlueprints($definition, $inputs);
       foreach ($definition->alters as $alter) {
-        $instance = $this->classResolver->getInstanceFromDefinition($alter->class);
+        $instance = $this->alter($alter->class);
         if ($instance instanceof AltersInputsInterface) {
-          $instance->alterInputs($blueprints[] = (new ResourceBlueprintAdditions($builder, $this->typedDataManager, $alter->module))->useShapes($this->shapes()));
+          $instance->alterInputs($blueprints[] = (new ResourceBlueprintAdditions($builder, $this->typedDataManager, $alter->module))->useShapes($this->shapes())->useReferences($this->references()));
         }
       }
     }
@@ -2851,7 +3099,7 @@ final class Resources implements ResourcesInterface {
         $variant = $this->registry->getDefinition($class);
         [$variant_context] = $this->invokeChild($variant, $context, $key, $parent->id);
         if ($variant->answersAccess()) {
-          $answer = $variant->access === NULL ? AccessResult::allowed() : static::atTheTop($this->instance($variant->access, OperationAccessInterface::class)->access($variant_context, $account));
+          $answer = $variant->access === NULL ? AccessResult::allowed() : static::atTheTop($this->answerAccess($variant->access, $variant_context, $account));
           $answer = $this->alteredAtTheTop($answer, $variant, $variant_context, $account);
           $answers[] = $answer;
           if ($answer->isForbidden()) {
@@ -2887,7 +3135,7 @@ final class Resources implements ResourcesInterface {
   /**
    * {@inheritdoc}
    */
-  public function storage(string $resource, OperationContext $context, ?DataSurfaceInterface $built = NULL): DataSurfaceStorageInterface {
+  public function storage(string $resource, OperationContext $context, ?DataSurfaceInterface $built = NULL, ?AccountInterface $account = NULL): DataSurfaceStorageInterface {
     $definition = $this->registry->getDefinition($resource);
     if ($definition->storage === NULL) {
       throw new \LogicException(sprintf(
@@ -2897,7 +3145,7 @@ final class Resources implements ResourcesInterface {
         $definition->id,
       ));
     }
-    return $this->storageFor($definition, $context, $built ?? $this->build($definition->name(), $context));
+    return $this->storageFor($definition, $context, $built ?? $this->build($definition->name(), $context), $account ?? $this->currentUser);
   }
 
   /**
@@ -2915,11 +3163,13 @@ final class Resources implements ResourcesInterface {
    *   Its context.
    * @param \Drupal\data_surface\DataSurfaceInterface $built
    *   The resource as built, whose entries carry the children.
+   * @param \Drupal\Core\Session\AccountInterface $account
+   *   The account each level writes as.
    *
    * @return \Drupal\data_surface\ResourceBuild\StorageAdapter
    *   The storage.
    */
-  protected function storageFor(ResourceDefinition $definition, OperationContext $context, DataSurfaceInterface $built): StorageAdapter {
+  protected function storageFor(ResourceDefinition $definition, OperationContext $context, DataSurfaceInterface $built, AccountInterface $account): StorageAdapter {
     $routes = [];
     foreach ($built->getDefinitions()->entries() as $key => $entry) {
       $children = $entry->attachment !== NULL
@@ -2928,16 +3178,19 @@ final class Resources implements ResourcesInterface {
       foreach ($children as $id => $attachment) {
         $child = $attachment->source === NULL ? NULL : $this->registry->getDefinition($attachment->source);
         if ($child?->storage !== NULL) {
-          $routes[(string) $key][(string) $id] = $this->storageFor($child, $this->invokeChild($child, $context, (string) $key, $definition->id)[0], $attachment->child);
+          $routes[(string) $key][(string) $id] = $this->storageFor($child, $this->invokeChild($child, $context, (string) $key, $definition->id)[0], $attachment->child, $account);
         }
       }
     }
+    $operation = $this->registry->getOperations($definition->name())[$context->id] ?? NULL;
     return new StorageAdapter(
       $this->instance((string) $definition->storage, ResourceStorageInterface::class),
       $context,
       $routes,
       $definition->identity,
-      $this->omittedKeys($definition, $built),
+      $this->omittedKeys($this->shapeOf($definition, $context), $built),
+      $operation?->kind() === OperationDefinition::DELETE,
+      $account,
     );
   }
 
@@ -3490,7 +3743,9 @@ final class Resources implements ResourcesInterface {
    * with, so the language holds it to that promise where it can: an
    * instance method can read whatever its alter was injected with, and
    * is only allowed as a runtime refiner. A static method may still
-   * declare runtime, since it can reach the global container.
+   * declare runtime, since it can reach the global container. A method
+   * that takes the account is runtime too: it is handed the account the
+   * operation runs as, which no schema knows ahead of time.
    *
    * Decision: see docs/decisions.md#static-by-default-runtime-by-declaration.
    *
@@ -3509,6 +3764,15 @@ final class Resources implements ResourcesInterface {
         '%s is an instance method of an alter of %s and does not declare runtime: TRUE. A static refiner is a pure function of the siblings it watches, which the served contract runs ahead of time, and an instance method can read the services its alter was built with: make it `public static` (translating with t()), or, if its answer depends on site state, declare #[RefinesInput(\'%s\', runtime: TRUE)].',
         $refiner->describe(),
         $definition->id,
+        $refiner->key,
+      ));
+    }
+    if ($refiner->takesAccount && !$refiner->runtime) {
+      // Decision: see
+      // docs/decisions.md#nothing-an-operation-runs-reads-the-request.
+      throw new \LogicException(sprintf(
+        '%s takes the account and does not declare runtime: TRUE. What the account may choose is a fact about the account, which no schema states ahead of time: declare #[RefinesInput(\'%s\', runtime: TRUE)].',
+        $refiner->describe(),
         $refiner->key,
       ));
     }
@@ -3765,7 +4029,7 @@ final class Resources implements ResourcesInterface {
    *   The blueprint, which names a structure mixed in by discovery's id.
    */
   protected function blueprint(DataSurfaceBuilderInterface $builder, ResourceDefinition $definition, bool $outputs = FALSE): ResourceBlueprint {
-    return (new ResourceBlueprint($builder, $this->typedDataManager, $outputs, $this->registry, $definition->name()))->useShapes($this->shapes());
+    return (new ResourceBlueprint($builder, $this->typedDataManager, $outputs, $this->registry, $definition->name()))->useShapes($this->shapes())->useReferences($this->references());
   }
 
   /**
@@ -3776,6 +4040,18 @@ final class Resources implements ResourcesInterface {
    */
   protected function shapes(): Shapes {
     return $this->shapes ??= new Shapes($this->registry, $this->classResolver);
+  }
+
+  /**
+   * Gets what builds a key that refers to an entity, for a blueprint.
+   *
+   * @return \Drupal\data_surface\Reference\References
+   *   The service.
+   */
+  protected function references(): References {
+    $references = $this->classResolver->getInstanceFromDefinition('data_surface.references');
+    assert($references instanceof References);
+    return $references;
   }
 
   /**
@@ -3882,7 +4158,48 @@ final class Resources implements ResourcesInterface {
     if (!$instance instanceof $interface) {
       throw new \LogicException(sprintf('%s is named as a %s but does not implement it.', $class, $interface));
     }
+    // Decision: see
+    // docs/decisions.md#nothing-an-operation-runs-reads-the-request.
+    assert(PipelineGuard::holdsNothingDoorSpecific($instance, match ($interface) {
+      ResourceStorageInterface::class => PipelineGuard::STORAGE,
+      OperationAccessInterface::class => PipelineGuard::ACCESS,
+      AltersAccessInterface::class => PipelineGuard::ALTER,
+      default => PipelineGuard::PROVIDER,
+    }));
     return $instance;
+  }
+
+  /**
+   * Gets an alter, held to holding no door-specific service.
+   *
+   * @param class-string $class
+   *   The alter's class.
+   *
+   * @return object
+   *   The instance.
+   */
+  protected function alter(string $class): object {
+    $instance = $this->classResolver->getInstanceFromDefinition($class);
+    assert(PipelineGuard::holdsNothingDoorSpecific($instance, PipelineGuard::ALTER));
+    return $instance;
+  }
+
+  /**
+   * Asks an access class at the top, guarded as everything an operation runs.
+   *
+   * @param class-string $class
+   *   The access class.
+   * @param \Drupal\data_surface\Resource\OperationContext $context
+   *   The context it answers for.
+   * @param \Drupal\Core\Session\AccountInterface $account
+   *   The account.
+   *
+   * @return \Drupal\Core\Access\AccessResultInterface|\Drupal\data_surface\Resource\AccessAnswer
+   *   Its answer.
+   */
+  protected function answerAccess(string $class, OperationContext $context, AccountInterface $account): AccessResultInterface|AccessAnswer {
+    $instance = $this->instance($class, OperationAccessInterface::class);
+    return PipelineGuard::onBehalf(PipelineGuard::ACCESS, $class, 'access', static fn (): AccessResultInterface|AccessAnswer => $instance->access($context, $account));
   }
 
 }

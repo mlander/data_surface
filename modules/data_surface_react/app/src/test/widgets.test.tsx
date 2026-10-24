@@ -5,6 +5,7 @@ import type { Extension, Schema, Values } from '../contract';
 import { setAt } from '../contract';
 import { ContractPanel } from '../ContractPanel';
 import { Properties } from '../widgets/Field';
+import { LookupContext, type Lookup } from '../widgets/Shell';
 
 // Each widget from a schema fragment the way the emitter writes one.
 
@@ -347,6 +348,21 @@ describe('checkboxes, radios and a time', () => {
   });
 });
 
+describe('computed', () => {
+  it('renders a computed key disabled, holding what the server computed, saying so', () => {
+    render(
+      <Form
+        schema={object({ slug: { title: 'Slug', description: 'The name in a link.', type: ['string', 'null'], readOnly: true, 'x-surface': x('text', { computed: { from: ['label'], when: 'create' } }) } }, [])}
+        initial={{ slug: 'town-hall' }}
+      />,
+    );
+    const input = screen.getByLabelText(/Slug/);
+    expect(input).toBeDisabled();
+    expect(input).toHaveValue('town-hall');
+    expect(input).toHaveAccessibleDescription('The name in a link. Computed from other keys when this is created, and kept as it is after.');
+  });
+});
+
 describe('locked', () => {
   it('renders a locked key disabled, saying why', () => {
     render(
@@ -646,7 +662,7 @@ describe('the contract panel', () => {
   it('lists a collection, its bounds, and its item keys once, under a star', () => {
     render(
       <ContractPanel
-        contract={{ resource: 'cellar', operation: 'edit', label: null, stale: [], values: {}, schema: object({}) }}
+        contract={{ resource: 'cellar', operation: 'update', label: null, stale: [], values: {}, schema: object({}) }}
         schema={object({
           racks: {
             title: 'Spice racks',
@@ -819,5 +835,99 @@ describe('a select standing for a stale value', () => {
     // and the label still says the key is required.
     expect(select).not.toBeRequired();
     expect(screen.getByText('*')).toBeInTheDocument();
+  });
+});
+
+describe('a value drawn fixed', () => {
+  it('draws the one value a deciding key may hold as its label, with no select and no input', () => {
+    const { container } = render(
+      <Form
+        schema={object(
+          {
+            source: {
+              title: 'Credential source',
+              type: 'string',
+              const: 'pasted',
+              default: 'pasted',
+              'x-surface': x('fixed', { fixed: 'Pasted here' }),
+            },
+          },
+          ['source'],
+        )}
+        initial={{ source: 'pasted' }}
+      />,
+    );
+    expect(screen.getByText('Credential source')).toBeInTheDocument();
+    expect(screen.getByText('Pasted here')).toBeInTheDocument();
+    expect(container.querySelector('select')).toBeNull();
+    expect(container.querySelector('input')).toBeNull();
+  });
+});
+
+describe('a key that refers to an entity (x-surface.widget: autocomplete)', () => {
+  const reference = { entityType: 'event_venue' };
+
+  it('draws the listed candidates as a select, as the form does up to the limit', () => {
+    render(
+      <Form
+        schema={object({ venue: { title: 'Venue', type: 'string', oneOf: venues, 'x-surface': x('autocomplete', { reference }) } })}
+        initial={{ venue: 'library' }}
+      />,
+    );
+    expect(screen.getByRole('combobox', { name: 'Venue' }).tagName).toBe('SELECT');
+    expect(screen.getByRole('option', { name: 'Old Library' })).toBeInTheDocument();
+  });
+
+  it('past the limit, looks the typed text up and takes the id of the candidate chosen', async () => {
+    const asked: [string, string, string | undefined][] = [];
+    const lookup: Lookup = async (path, text, type) => {
+      asked.push([path, text, type]);
+      return [{ id: 'riverside', label: 'Riverside Hall' }];
+    };
+    let last: Values = {};
+    render(
+      <LookupContext.Provider value={lookup}>
+        <Form
+          schema={object({ venue: { title: 'Venue', type: 'string', 'x-surface': x('autocomplete', { reference }) } })}
+          initial={{ venue: null }}
+          onValues={(values) => {
+            last = values;
+          }}
+        />
+      </LookupContext.Provider>,
+    );
+    const input = screen.getByRole('combobox', { name: 'Venue' });
+    expect(input.tagName).toBe('INPUT');
+    await userEvent.type(input, 'r');
+    await userEvent.click(await screen.findByRole('button', { name: 'Riverside Hall (riverside)' }));
+    expect(asked[0]).toEqual(['venue', 'r', undefined]);
+    expect(last).toEqual({ venue: 'riverside' });
+  });
+
+  it("looks a bare reference's id up of the entity type its sibling holds", async () => {
+    const asked: [string, string, string | undefined][] = [];
+    const lookup: Lookup = async (path, text, type) => {
+      asked.push([path, text, type]);
+      return [];
+    };
+    render(
+      <LookupContext.Provider value={lookup}>
+        <Form
+          schema={object({
+            thing: {
+              ...object({
+                entity_type: { title: 'Entity type', type: 'string', 'x-surface': x('text') },
+                id: { title: 'ID', type: 'string', 'x-surface': x('autocomplete', { reference: { by: 'entity_type' } }) },
+              }),
+              title: 'Featured beside',
+              'x-surface': x('fieldset'),
+            },
+          })}
+          initial={{ thing: { entity_type: 'node', id: null } }}
+        />
+      </LookupContext.Provider>,
+    );
+    await userEvent.type(screen.getByRole('combobox', { name: 'ID' }), '5');
+    expect(asked[0]).toEqual(['thing.id', '5', 'node']);
   });
 });

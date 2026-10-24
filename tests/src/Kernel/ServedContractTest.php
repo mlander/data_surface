@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Drupal\Tests\data_surface\Kernel;
 
+use Drupal\Tests\data_surface\Traits\ServedControllerTrait;
 use Drupal\Core\TypedData\DataDefinition;
 use Drupal\data_surface\Contract\SchemaResolver;
 use Drupal\data_surface\DataSurfaceBuilder;
@@ -16,7 +17,6 @@ use Drupal\data_surface\Resource\OperationContext;
 use Drupal\data_surface\Attachment;
 use Drupal\data_surface_demo\Structure\DemoBlockStructure;
 use Drupal\data_surface_examples\Venues;
-use Drupal\data_surface_react\Controller\ResourceApiController;
 use Drupal\data_surface_resource_test\Structure\Crate\CrateStructure;
 use Drupal\data_surface_resource_test\Structure\Cupboard\CupboardStructure;
 use Drupal\data_surface_resource_test\Resource\Pantry\PantryResource;
@@ -27,7 +27,6 @@ use Opis\JsonSchema\CompliantValidator;
 use PHPUnit\Framework\Attributes\Group;
 use PHPUnit\Framework\Attributes\IgnoreDeprecations;
 use PHPUnit\Framework\Attributes\RunTestsInSeparateProcesses;
-use Symfony\Component\HttpFoundation\Request;
 
 /**
  * Tests the served contract the main module emits, over five builds.
@@ -51,6 +50,8 @@ use Symfony\Component\HttpFoundation\Request;
 #[Group('data_surface')]
 #[RunTestsInSeparateProcesses]
 class ServedContractTest extends DataSurfaceKernelTestBase {
+
+  use ServedControllerTrait;
 
   use ContractValidationTrait;
   use UserCreationTrait;
@@ -296,7 +297,7 @@ class ServedContractTest extends DataSurfaceKernelTestBase {
     ]);
     $this->assertSame(['show' => TRUE, 'label' => '- Select -'], $orphaned['schema']['properties']['room']['x-surface']['emptyOption']);
     $this->assertNull($moved['values']['room']);
-    $this->assertSame(['room'], $moved['stale']);
+    $this->assertSame(['/room'], $moved['stale']);
 
     // The garden room seats 30.
     $garden = $this->contract('registration.step2', 'configure', [], ['venue' => 'library', 'room' => 'library_garden']);
@@ -325,7 +326,7 @@ class ServedContractTest extends DataSurfaceKernelTestBase {
     $this->assertTrue($room['x-surface']['stale']);
     $this->assertSame(['show' => TRUE, 'label' => '- Select -'], $room['x-surface']['emptyOption']);
     $this->assertNull($contract['values']['room']);
-    $this->assertSame(['room'], $contract['stale']);
+    $this->assertSame(['/room'], $contract['stale']);
     // Nothing caps the capacity by a room no longer on the screen.
     $capacity = $contract['schema']['properties']['capacity'];
     $this->assertSame(1, $capacity['minimum']);
@@ -344,7 +345,7 @@ class ServedContractTest extends DataSurfaceKernelTestBase {
     $this->assertTrue($number['schema']['properties']['capacity']['x-surface']['stale']);
     $this->assertArrayNotHasKey('emptyOption', $number['schema']['properties']['capacity']['x-surface']);
     $this->assertNull($number['values']['capacity']);
-    $this->assertSame(['capacity'], $number['stale']);
+    $this->assertSame(['/capacity'], $number['stale']);
   }
 
   /**
@@ -472,14 +473,13 @@ class ServedContractTest extends DataSurfaceKernelTestBase {
     $this->assertTrue($this->validates($schema, $canonical['values']));
 
     // The React endpoint asks for them.
-    $controller = $this->container->get('class_resolver')->getInstanceFromDefinition(ResourceApiController::class);
-    $served = json_decode((string) $controller->contract(Request::create('/surface-api/registration.step3/configure'), 'registration.step3', 'configure')->getContent(), TRUE);
+    $served = $this->servedJson('GET', '/surface-api/registration.step3');
     $this->assertSame('variants', $served['schema']['properties']['ticket']['x-surface']['widget']);
     $this->assertSame('select', $served['schema']['properties']['venue']['x-surface']['widget']);
     $this->assertArrayNotHasKey('x-surface', $this->conditional($served['schema'], 'pricing', 'paid', 'ticket'));
     // Served at a route, so it says where: its local references resolve
     // wherever it is embedded.
-    $this->assertStringEndsWith('/surface-api/registration.step3/configure', $served['schema']['$id']);
+    $this->assertStringEndsWith('/surface-api/registration.step3', $served['schema']['$id']);
     unset($served['schema']['$id']);
     $this->assertSame($hinted['schema'], $served['schema']);
   }
@@ -720,15 +720,12 @@ class ServedContractTest extends DataSurfaceKernelTestBase {
   public function testEnumeratedConditionalsAreWhatRefineAnswers(): void {
     [$contract] = $this->staticContract($this->operationSurface('registration.step2'), 'registration.step2');
     $static = $contract['schema'];
-    $controller = $this->container->get('class_resolver')->getInstanceFromDefinition(ResourceApiController::class);
     $compared = 0;
     foreach (['room', 'capacity'] as $key) {
       foreach ($this->branches($static, $key) as [$when, $then]) {
         // A room is sent with its own venue, which /refine needs to admit it.
         $values = $when + (isset($when['room']) ? ['venue' => Venues::ROOMS[$when['room']]['venue']] : []);
-        $body = (string) json_encode(['values' => $values, 'stale' => []]);
-        $request = Request::create('/surface-api/registration.step2/configure/refine', 'POST', content: $body);
-        $answer = json_decode((string) $controller->refine($request, 'registration.step2', 'configure')->getContent(), TRUE);
+        $answer = $this->servedJson('POST', '/surface-api/registration.step2/schema', $values);
         $refined = $answer['schema']['properties'][$key];
         $this->assertTrue($refined['x-surface']['refined']);
         $this->assertEquals($this->plain($refined), $this->applied($this->plain($static['properties'][$key]), $then), $key . ' for ' . json_encode($when));
@@ -1008,7 +1005,7 @@ class ServedContractTest extends DataSurfaceKernelTestBase {
 
     // A child whose unit defaults to `cm` is not described for `cm`.
     $this->enableModules(['data_surface_resource_test']);
-    $pantry = $this->container->get('data_surface.resources')->build(PantryResource::class, PantryResource::add());
+    $pantry = $this->container->get('data_surface.resources')->build(PantryResource::class, PantryResource::create());
     $emitter = $this->container->get('data_surface.contract_emitter');
     $document = json_decode((string) json_encode($emitter->emitFull($pantry, 'resource_test.pantry')->document['schema']), TRUE);
     $shelf = SchemaResolver::inline($document['properties']['shelf'], $document);
@@ -1231,7 +1228,7 @@ class ServedContractTest extends DataSurfaceKernelTestBase {
    */
   public function testOneDefPerChildClass(): void {
     $this->enableModules(['data_surface_resource_test']);
-    $context = (new OperationContext('edit'))->withChild('left', new OperationContext('edit', known: ['bin' => 'left']));
+    $context = (new OperationContext('update'))->withChild('left', new OperationContext('update', known: ['bin' => 'left']));
     $cupboard = $this->container->get('data_surface.resources')->build(CupboardStructure::class, $context);
     $emitter = $this->container->get('data_surface.contract_emitter');
     $full = json_decode((string) json_encode($emitter->emitFull($cupboard, 'resource_test.cupboard')->document['schema']), TRUE);
@@ -1370,7 +1367,7 @@ class ServedContractTest extends DataSurfaceKernelTestBase {
    */
   public function testNodeType(): void {
     NodeType::create(['type' => 'article', 'name' => 'Article'])->save();
-    $edit = $this->contract('node.type', 'edit', ['type' => 'article']);
+    $edit = $this->contract('node.type', 'update', ['type' => 'article']);
     $schema = $edit['schema'];
     $type = $schema['properties']['type'];
     $this->assertTrue($type['x-surface']['locked']);
@@ -1385,7 +1382,7 @@ class ServedContractTest extends DataSurfaceKernelTestBase {
     $this->assertSame([0, 1, 2], array_column(array_filter($preview['oneOf'], fn (array $choice): bool => isset($choice['title'])), 'const'));
     $this->assertSame('integer', $preview['type']);
 
-    $add = $this->contract('node.type', 'add');
+    $add = $this->contract('node.type', 'create');
     $type = $add['schema']['properties']['type'];
     $this->assertFalse($type['x-surface']['locked']);
     $this->assertArrayNotHasKey('readOnly', $type);
@@ -1545,12 +1542,12 @@ class ServedContractTest extends DataSurfaceKernelTestBase {
   #[IgnoreDeprecations]
   public function testSchemasWithLengthsValidate(): void {
     NodeType::create(['type' => 'article', 'name' => 'Article'])->save();
-    $edit = $this->contract('node.type', 'edit', ['type' => 'article']);
+    $edit = $this->contract('node.type', 'update', ['type' => 'article']);
     $this->assertWellFormed($edit['schema']);
     $this->assertTrue($this->validates($edit['schema'], $edit['values']));
     $this->assertFalse($this->validates($edit['schema'], ['type' => 'page'] + $edit['values']), 'The locked machine name holds one value.');
     $this->assertFalse($this->validates($edit['schema'], ['name' => str_repeat('a', 256)] + $edit['values']));
-    $this->assertWellFormed($this->contract('node.type', 'add')['schema']);
+    $this->assertWellFormed($this->contract('node.type', 'create')['schema']);
 
     $surface = $this->container->get('data_surface.resources')->build(DemoBlockStructure::class, new OperationContext('configure'));
     $document = $this->container->get('data_surface.contract_emitter')

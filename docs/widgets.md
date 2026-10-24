@@ -65,7 +65,8 @@ function my_module_data_surface_widget_info_alter(array &$definitions): void {
 | --- | --- | --- | --- |
 | `checkboxes` | -15 | A list whose item resolves to a list of allowed values, while it offers at most twelve (`CheckboxesWidget::MAXIMUM_OPTIONS`), or that asks for checkboxes. | `checkboxes`, never `#required` |
 | `radios` | -15 | One value that resolves to a list of allowed values and asks for radios. | `radios`; `- None -` a radio only where the key may be cleared |
-| `options` | -10 | Any definition whose constraints resolve to a list of allowed values, an empty one included: one value, and a list the checkboxes leave (more than twelve, or asking for a select). See [Options and resolvers](options.md). | `select`; a list's `#multiple`, never `#required` |
+| `options` | -10 | Any definition whose constraints resolve to a list of allowed values, an empty one included: one value, and a list the checkboxes leave (more than twelve, or asking for a select). See [Options and resolvers](options.md). | `select`; a list's `#multiple`, never `#required`; an `item` showing the one value a deciding key's variants offer |
+| `autocomplete` | -5 | A key that refers to one entity type, `entity:<type>[:<bundle>]` or a bare `entity` key's id once its entity type is chosen, whose candidates are not listed: more than `data_surface.settings:reference_enum_limit` ([Options](options.md#a-key-that-refers-to-an-entity)). | core's `entity_autocomplete`, its selection settings the key's; read back as the id in brackets, `Riverside Hall (riverside)` as `riverside`; core's own check of what was typed taken off |
 | `map` | 5 | A `ComplexDataDefinitionInterface`. One that declares no property, such as a variant for a choice with nothing more to say, renders as an empty container and answers an empty map. | `details` |
 | `list` | 8 | A list of single values with no list of allowed values, whose item a widget draws: keywords, a list of free strings or numbers. | a `fieldset` of rows, "Remove" beside each, "Add another" under them |
 | `time` | 9 | A `string` that asks for a time. | a time input |
@@ -76,7 +77,8 @@ function my_module_data_surface_widget_info_alter(array &$definitions): void {
 The weights say the selection rule out loud: the checkboxes and radios
 are asked first, and each claims only what its rule gives it; the
 options widget next, so a string key carrying a `Choice` renders as a
-select rather than a text field; the map widget comes next, so a complex
+select rather than a text field; a reference with too many candidates
+to list next, so it is no number or text field; the map widget comes next, so a complex
 definition that also resolves to options is still a select; the list
 widget takes a list with no choices; and the per-type widgets are the
 fallback.
@@ -94,6 +96,11 @@ the stock widgets have a rule ([decision](decisions.md#a-widget-is-chosen-from-t
 - **One choice is a select**, whatever its length, unless it asks for
   radios. A select has none of the multiple select's faults, and radios
   spend a line per choice on every key, which is the page's to decide.
+- **One value to choose is no choice.** A deciding key whose variants
+  offer one value, which may not be cleared, is drawn as an `item`
+  showing that value's label and posting the value, while it holds it or
+  nothing; a list the key declares, or a stored value no longer offered,
+  is a select as above ([decision](decisions.md#an-extension-is-a-variant-the-site-adds-or-an-alter)).
 - **A list of free values is rows**, each the element the item's own
   widget draws, added and removed over AJAX. Each item keeps its own
   element's hints, and a refusal of one is shown on its row.

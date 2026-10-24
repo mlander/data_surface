@@ -32,7 +32,7 @@ namespace Drupal\data_surface\Resource\Attribute;
  *
  * With this, an operation can be listed, addressed and generated from:
  *   - a discovery document lists every resource with its operations;
- *   - a tool exists per operation, `field.instance:edit`, its inputs
+ *   - a tool exists per operation, `field.instance:update`, its inputs
  *     being the method's parameters plus the resource's open keys, its
  *     description this one's;
  *   - a route maps its parameters onto one operation;
@@ -100,6 +100,20 @@ final class Operation {
    *   the tool's description and the top `description` of both schema
    *   documents. NULL takes the method's docblock summary, for the method
    *   form; the class form then has none.
+   * @param bool $deletes
+   *   Whether a call removes the thing it names: it takes no values, only
+   *   the parameters that name the thing, and its kind is a delete. Such
+   *   an operation says destructive: TRUE too, and neither creates nor is
+   *   read only; the facts are refused at discovery otherwise. Its tool
+   *   takes the parameters and a dry run, and HTTP serves it as DELETE.
+   * @param class-string<\Drupal\data_surface\Resource\StructureInterface>|null $values
+   *   The structure whose keys a call takes, when they are not the
+   *   resource's own: a listing's paging and filter, a reorder's list of
+   *   ids and weights. Its inputs are what the operation takes and its
+   *   outputs what it answers; the resource's storage, identity, access
+   *   and permission stay the resource's. NULL, the default, takes the
+   *   resource's keys. Refused on an operation that creates or deletes,
+   *   which is about the thing's own keys.
    */
   public function __construct(
     public readonly string $id,
@@ -112,6 +126,8 @@ final class Operation {
     public readonly ?bool $idempotent = NULL,
     public readonly bool $creates = FALSE,
     public readonly string|\Stringable|null $description = NULL,
+    public readonly bool $deletes = FALSE,
+    public readonly ?string $values = NULL,
   ) {}
 
 }

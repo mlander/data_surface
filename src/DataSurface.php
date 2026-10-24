@@ -349,6 +349,14 @@ final class DataSurface implements DataSurfaceInterface {
     // What was handed as nothing because its own key refused it, which a
     // refusal names as such.
     $refusals = [];
+    // What a key's definition as declared refuses, every definition
+    // refined from it refuses too, since refinement only narrows: it is
+    // withheld before any refiner runs, so none is handed a value of
+    // another type.
+    foreach ($this->watchedValueCheck === NULL ? [] : $this->refusedWatchedValues($this, $admitted) as $path) {
+      $refusals[$path] = NestedArray::getValue($values, explode('.', $path));
+      NestedArray::setValue($admitted, explode('.', $path), NULL, TRUE);
+    }
     do {
       $refined = $this->refineAgainst($values, $admitted, $runtime);
       $refused = $this->watchedValueCheck === NULL ? [] : $this->refusedWatchedValues($refined, $admitted);
@@ -722,7 +730,20 @@ final class DataSurface implements DataSurfaceInterface {
     foreach ($this->definitions->refinementDependencies() as $path) {
       $parents = explode('.', $path);
       $value = NestedArray::getValue($admitted, $parents);
-      if (!ValueState::isConfigured($value) || $this->definitions->entry($parents[0])?->isNested() !== FALSE) {
+      if (!ValueState::isConfigured($value)) {
+        continue;
+      }
+      $port = $this->definitions->entry($parents[0]) === NULL && count($parents) === 1 ? ($this->portDefinitions[$path] ?? NULL) : NULL;
+      if ($port !== NULL) {
+        // A port's value, read from the container, held to the type the
+        // structure declared it with: a capacity the container holds as
+        // a word reaches no refiner typed for a number.
+        if ($this->watchedValueCheck !== NULL && !$this->watchedValueCheck->admits($port, $value)) {
+          $refused[] = $path;
+        }
+        continue;
+      }
+      if ($this->definitions->entry($parents[0])?->isNested() !== FALSE) {
         continue;
       }
       $definition = $refined->getDefinition((string) array_shift($parents));
@@ -800,10 +821,10 @@ final class DataSurface implements DataSurfaceInterface {
     }
     $value = $values[$entry->name] ?? NULL;
     $chosen = $entry->variants?->chosen($values[$entry->variants->by] ?? NULL);
-    if ($chosen !== NULL && !$entry->variants->fits($chosen, $value)) {
+    if ($chosen !== NULL) {
       // A value left behind by another variant says nothing about this
       // one, so the variant is refined from its own defaults.
-      $value = [];
+      $value = $entry->variants->held($chosen, $value) ?? [];
     }
     $refined = $child->refine(array_replace($child->getDefaultValues(), is_array($value) ? $value : []), $runtime);
     $cacheability->addCacheableDependency($refined);

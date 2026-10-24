@@ -882,7 +882,7 @@ example.edit:
     _form: 'Drupal\data_surface\Form\DataSurfaceOperationForm'
     _title: 'Edit example'
     _data_surface_resource: 'Drupal\example\Resource\ExampleResource'
-    _data_surface_operation: 'edit'
+    _data_surface_operation: 'update'
     _data_surface_cosmetics: 'example.surface_form_cosmetics'
   requirements:
     _data_surface_operation_access: 'TRUE'
@@ -903,7 +903,7 @@ The defaults:
 
 The route's parameters are the operation method's, by name: an upcast
 entity parameter arrives as the entity, a plain one as its value, so
-`edit(NodeTypeInterface $type)` is served by a route with a `{type}`
+`update(NodeTypeInterface $type)` is served by a route with a `{type}`
 parameter upcast to a node type. The defaults are underscore-prefixed
 because Drupal's routing treats such defaults as its own: no parameter
 converter tries to upcast them and no argument resolver tries to hand
@@ -911,7 +911,13 @@ them to `buildForm()`.
 
 The form builds the context with the operation, builds the resource in
 it, loads current values from the resource's composed storage, and
-submits through the pipeline to that storage. A locked identity key
+submits through the pipeline to that storage. Its validation runs the
+whole run dry, access and storage's own `prepare()` included, so every
+refusal is said on its element while Form API still takes errors, and
+the submit runs it again and writes; a refusal that arrives only then,
+what is stored having moved in between, is said as a message
+([Nothing an operation runs reads the
+request](decisions.md#nothing-an-operation-runs-reads-the-request)). A locked identity key
 renders as a disabled element holding the value the operation knows,
 and extraction keeps that value whatever is posted. A resource its
 access locks at the top renders every element disabled, says why above

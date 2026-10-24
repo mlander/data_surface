@@ -22,6 +22,9 @@ host says it emits is a typed map of definitions; what it actually
 emits is a plain PHP array, exactly like the values flowing the other
 way.
 
+For how this fits with the other kinds of transformation, see
+[Transformations](transformations.md).
+
 ## Declaring outputs
 
 Beside the inputs, in the same class, on `DefinesOutputsInterface`:
@@ -191,7 +194,15 @@ inputs get. What is lost, on top of the two the inputs already lose
 The tools `data_surface_tool` derives from operations answer with the
 accepted `values`, as the read tool would answer them, `committed`, and
 the resource's own outputs converted here; a dry run answers the same
-`values` and no outputs. What prepare rehearsed, in storage layout, is
+`values` and no outputs. A resource's outputs are what its storage's
+`load()` hands back once the values are committed; a read only
+operation, which is never committed, answers what its storage's
+`prepare()` answered under an output's name
+([decision](decisions.md#who-produces-outputs)). An operation that takes
+the keys of a structure of its own (`#[Operation(values:)]`) answers
+that structure's outputs: example 15's listing declares `items`, a list
+of maps, and `total`
+([An operation that takes keys of its own](resources.md#an-operation-that-takes-keys-of-its-own)). What prepare rehearsed, in storage layout, is
 never served ([decision](decisions.md#every-door-projects-what-the-read-tool-projects)).
 
 ## Contributing an output

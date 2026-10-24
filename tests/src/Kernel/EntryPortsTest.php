@@ -228,9 +228,9 @@ class EntryPortsTest extends DataSurfaceKernelTestBase {
     $this->assertFalse($result->isSuccess());
     $this->assertSame([
       [
-        'path' => 'limits.student.per_order',
+        'path' => '/limits/student/per_order',
         'code' => 'does_not_apply',
-        'message' => 'Per order does not apply when on_sale.student is off.',
+        'message' => 'Per order does not apply when On sale: Student is off.',
       ],
     ], $result->getContextValues()['violations']);
     // What it holds already, or nothing, is no value sent.
