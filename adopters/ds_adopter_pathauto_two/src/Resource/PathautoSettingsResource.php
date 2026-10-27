@@ -7,8 +7,6 @@ namespace Drupal\ds_adopter_pathauto_two\Resource;
 use Drupal\Core\StringTranslation\TranslatableMarkup;
 use Drupal\Core\TypedData\DataDefinition;
 use Drupal\Core\Url;
-use Drupal\data_surface\DefinitionMetadata;
-use Drupal\data_surface\Resource\Arrangement;
 use Drupal\data_surface\Resource\ArrangementGroup;
 use Drupal\data_surface\Resource\Attribute\Operation;
 use Drupal\data_surface\Resource\Attribute\Resource;
@@ -42,54 +40,63 @@ final class PathautoSettingsResource implements ResourceInterface {
    * {@inheritdoc}
    */
   public static function defineInputs(BlueprintInterface $inputs): void {
+    $help = self::helpLink();
+
     $inputs->addEach('enabled_entity_types', 'boolean', from: PathautoEntityTypes::class, default: FALSE)
       ->setLabel(t('Enabled entity types'))
       ->setDescription(t('Enable to add a path field and allow to define alias patterns for the given type. Disabled types already define a path field themselves or currently have a pattern.'));
+
     $inputs->add('verbose', 'boolean', t('Verbose'), default: FALSE)
       ->setDescription(t('Display alias changes (except during bulk updates).'));
+
     $inputs->add('separator', 'string', t('Separator'), default: '-')
       ->setDescription(t('Character used to separate words in titles. This will replace any spaces and punctuation characters. Using a space or + character can cause unexpected results.'))
       ->addConstraint('Length', ['max' => 1]);
+
     $inputs->add('case', 'boolean', t('Character case'), default: TRUE)
       ->setDescription(t('Convert token values to lowercase.'));
-    $help = self::helpLink();
+
+    // Limits.
     $inputs->add('max_length', 'integer', t('Maximum alias length'), default: 150)
       ->setDescription(t('Maximum length of aliases to generate. 100 is the recommended length. @max is the maximum possible length.', ['@max' => self::ALIAS_MAX]) . $help)
       ->addConstraint('Range', ['min' => 1, 'max' => self::ALIAS_MAX]);
+
     $inputs->add('max_component_length', 'integer', t('Maximum component length'), default: 100)
       ->setDescription(t('Maximum text length of any component in the alias (e.g., [title]). 100 is the recommended length. @max is the maximum possible length.', ['@max' => self::ALIAS_MAX]) . $help)
       ->addConstraint('Range', ['min' => 1, 'max' => self::ALIAS_MAX]);
+
+    // Updates.
     $inputs->add('update_action', 'integer', t('Update action'), default: PathautoGeneratorInterface::UPDATE_ACTION_DELETE)
       ->setDescription(self::updateActionDescription())
       ->setSetting('widget', 'radios')
       ->addConstraint('LabeledChoice', [
-        'choices' => [
-          PathautoGeneratorInterface::UPDATE_ACTION_NO_NEW,
-          PathautoGeneratorInterface::UPDATE_ACTION_LEAVE,
-          PathautoGeneratorInterface::UPDATE_ACTION_DELETE,
-        ],
         'labels' => [
           PathautoGeneratorInterface::UPDATE_ACTION_NO_NEW => t('Do nothing. Leave the old alias intact.'),
           PathautoGeneratorInterface::UPDATE_ACTION_LEAVE => t('Create a new alias. Leave the existing alias functioning.'),
           PathautoGeneratorInterface::UPDATE_ACTION_DELETE => t('Create a new alias. Delete the old alias.'),
         ],
       ]);
+
+    // Cleaning.
     $inputs->add('transliterate', 'boolean', t('Transliterate prior to creating alias'), default: TRUE)
       ->setDescription(t('When a pattern includes certain characters (such as those with accents) should Pathauto attempt to transliterate them into the US-ASCII alphabet?'));
+
     $inputs->add('reduce_ascii', 'boolean', t('Reduce strings to letters and numbers'), default: FALSE)
       ->setDescription(t('Filters the new alias to only letters and numbers found in the ASCII-96 set.'));
+
     $inputs->add('ignore_words', 'string', t('Strings to Remove'))
       ->setDescription(t('Words to strip out of the URL alias, separated by commas. Do not use this to remove punctuation.'))
       ->setSetting('multiline', TRUE);
+
     $inputs->addList('safe_tokens', 'string', t('Safe tokens'), default: [])
       ->setDescription(t('List of tokens that are safe to use in alias patterns and do not need to be cleaned. For example urls, aliases, machine names. Separated with a comma.'))
       ->setSetting('widget', 'ds_adopter_pathauto_two_comma_list');
-    $punctuation = $inputs->addEach('punctuation', PunctuationAction::class, from: PunctuationCharacters::class)
+
+    $inputs->addEach('punctuation', PunctuationAction::class, from: PunctuationCharacters::class)
       ->setLabel(t('Punctuation'));
-    DefinitionMetadata::setArrangement($punctuation, new Arrangement(
-      group: ArrangementGroup::details('punctuation', t('Punctuation'), collapsed: TRUE),
-    ));
+    $inputs->describe('punctuation', group: ArrangementGroup::details('punctuation', t('Punctuation'), collapsed: TRUE));
   }
+
 
   /**
    * The link to pathauto's help page, while the help module is on.

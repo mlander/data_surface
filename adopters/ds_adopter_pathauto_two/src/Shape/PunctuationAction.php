@@ -22,11 +22,6 @@ final class PunctuationAction implements ShapeInterface {
     return DataDefinition::create('integer')
       ->setLabel(t('Punctuation action'))
       ->addConstraint('LabeledChoice', [
-        'choices' => [
-          PathautoGeneratorInterface::PUNCTUATION_REMOVE,
-          PathautoGeneratorInterface::PUNCTUATION_REPLACE,
-          PathautoGeneratorInterface::PUNCTUATION_DO_NOTHING,
-        ],
         'labels' => [
           PathautoGeneratorInterface::PUNCTUATION_REMOVE => t('Remove'),
           PathautoGeneratorInterface::PUNCTUATION_REPLACE => t('Replace by separator'),
