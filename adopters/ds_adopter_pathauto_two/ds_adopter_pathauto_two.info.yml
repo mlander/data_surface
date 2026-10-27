@@ -1,0 +1,8 @@
+name: 'Data Surface adopter: Pathauto settings, second port'
+type: module
+description: 'Pathauto settings form ported onto Data Surface from the documentation alone. Sandbox.'
+package: Data Surface
+core_version_requirement: ^11.3 || ^12
+dependencies:
+  - data_surface:data_surface
+  - pathauto:pathauto

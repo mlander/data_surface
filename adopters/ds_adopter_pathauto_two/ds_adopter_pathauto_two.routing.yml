@@ -1,0 +1,7 @@
+ds_adopter_pathauto_two.settings:
+  path: '/admin/config/search/path/surface-settings-two'
+  defaults:
+    _form: 'Drupal\data_surface\Form\DataSurfaceOperationForm'
+    _title: 'Pathauto settings (Data Surface, second port)'
+    _data_surface_resource: 'Drupal\ds_adopter_pathauto_two\Resource\PathautoSettingsResource'
+    _data_surface_operation: 'configure'
